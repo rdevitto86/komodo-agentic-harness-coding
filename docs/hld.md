@@ -14,7 +14,7 @@ Komodo is one Go binary that turns a goal into reviewed, published code. It plan
 ```mermaid
 flowchart LR
   G(["Goal or documents"]):::actor
-  I["Intake<br><small>planner writes task lists</small>"]
+  I["Intake<br><small>planner writes a plan</small>"]
   B["Build<br><small>one builder per group</small>"]:::core
   T["Test<br><small>Quality Assurance in a sandbox</small>"]:::core
   R["Review<br><small>reviewer</small>"]:::core
@@ -78,16 +78,16 @@ flowchart LR
   P["Planner and agent models<br><small>subscription or paid links</small>"]:::ext
   D["Container runtime<br><small>test sandboxes</small>"]:::ext
   G["GitHub<br><small>branches, pull requests</small>"]:::ext
-  RF[("Repository<br><small>documents, task lists</small>")]:::store
-  MF[("Machine files<br><small>settings, state, leases, cache</small>")]:::store
+  RF[("Repository<br><small>documents</small>")]:::store
+  MF[("Machine files<br><small>settings, plans, state, leases, cache</small>")]:::store
   H <-->|"1 intent, results"| O
   H -->|"2 commands"| K
   O -->|"3 commands, structured reply"| K
   K -->|"4 sessions"| P
   K -->|"5 create, validate, destroy"| D
   K -->|"6 commit, push"| G
-  K -->|"7 read documents, write task lists"| RF
-  K -->|"8 settings, state, leases"| MF
+  K -->|"7 read documents"| RF
+  K -->|"8 settings, plans, state, leases"| MF
 ```
 
 ## 4. Solution Strategy
@@ -123,7 +123,7 @@ flowchart LR
   WA["Watchers<br><small>Error Handler · Metrics · Resource Manager</small>"]:::muted
   IF -->|"1 command events"| SP
   SP -->|"2 plan"| PL
-  PL -->|"3 run-start: task lists ready"| RT
+  PL -->|"3 run-start: plan approved"| RT
   RT -->|"4 start a Task Manager"| WK
   WK -->|"5 run status"| SP
   SP -->|"6 every event"| WA
@@ -132,7 +132,7 @@ flowchart LR
 
 1. The CLI sends each command to the Runtime Manager, which broadcasts it as plan, run-start, run-stop or run-continue.
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
-3. The Intake Handler publishes run-start for the task lists it wrote.
+3. The Intake Handler writes the plan and stops. Approving the plan with `komodo run` publishes run-start [TODO: auto-approval options ([G-322](lld.md#g-322))].
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
 5. Each group's progress goes back onto the bus as run-status events.
 6. The watchers receive every event.
@@ -158,7 +158,7 @@ The Event Bus is the spine: every subsystem publishes facts to it, and every sub
 
 #### 5.6 Intake Handler
 
-The Intake Handler is the Intake stage. It starts the planner agent, gives it context from the Context Manager, and turns existing documents such as an HLD or a product requirements document into task lists of task groups and tasks. When a plan passes its checks, the handler publishes run-start for the groups it wrote. Detail: [chapter 5](lld.md#5-intake-handler).
+The Intake Handler is the Intake stage. It starts the planner agent, gives it context from the Context Manager, and turns existing documents such as an HLD or a product requirements document into a plan: one temporary file of task groups and tasks, kept outside the repository. When a plan passes its checks, the handler prints its path and id and stops until someone approves it. Detail: [chapter 5](lld.md#5-intake-handler).
 
 #### 5.7 Context Manager
 
@@ -166,7 +166,7 @@ The Context Manager guards everything an agent may see beyond the code: skills (
 
 #### 5.8 Runtime Manager
 
-The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand ([7.1](#71-processes)). Before any group starts it creates the epic's branch, and the Commit Handler commits the task lists onto it. Detail: [chapter 7](lld.md#7-runtime-manager).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand ([7.1](#71-processes)). Before any group starts it creates the epic's branch. Detail: [chapter 7](lld.md#7-runtime-manager).
 
 #### 5.9 Cache Manager
 
@@ -190,7 +190,7 @@ The Builder is the engineering agent that writes the code for one task group, ta
 
 #### 5.14 Quality Assurance
 
-Quality Assurance checks the builder's new and changed code: test accuracy, that every task-list item is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance runs at every risk level and checks each item with its own run tool, scoring confidence from 0 to 100; Go never reruns it. A pass needs 80 or more, else the group returns to the Builder; a failed item blocks even without a command. A standing check enforces coverage: no change lowers whole-repository coverage below 90%, and each covers 90% of its added lines [TODO: how the planner brings a repository to 90% coverage ([G-321](lld.md#g-321))]. When the group is untestable, or it fails twice in a row, it fails open: the pull request carries a warning and no try is spent. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
+Quality Assurance checks the builder's new and changed code: test accuracy, that every acceptance criterion is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance runs at every risk level and checks each item with its own run tool, scoring confidence from 0 to 100; Go never reruns it. A pass needs 80 or more, else the group returns to the Builder; a failed item blocks even without a command. A standing check enforces coverage: no change lowers whole-repository coverage below 90%, and each covers 90% of its added lines [TODO: how the planner brings a repository to 90% coverage ([G-321](lld.md#g-321))]. When the group is untestable, or it fails twice in a row, it fails open: the pull request carries a warning and no try is spent. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
 
 #### 5.15 Reviewer
 
@@ -202,7 +202,7 @@ The Commit Handler publishes approved work: it squashes each approved group onto
 
 #### 5.17 Cleanup Handler
 
-The Cleanup Handler runs after work is pushed. It removes the group's redundant branches, even an unchanged one, and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. Detail: [chapter 16](lld.md#16-cleanup-handler).
+The Cleanup Handler runs after work is pushed. It removes the group's redundant branches, even an unchanged one, and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. When every group of a plan is closed, it deletes the plan's folder. Detail: [chapter 16](lld.md#16-cleanup-handler).
 
 #### 5.18 Error Handler
 
@@ -275,9 +275,10 @@ sequenceDiagram
 
 1. `komodo plan` starts the Intake Handler with goal text or documents.
 2. The Intake Handler gets context from the Context Manager and starts the planner agent.
-3. The planner drafts task groups, tasks, file patterns, dependencies and acceptance items.
+3. The planner drafts task groups, tasks, file patterns, dependencies, definitions of done and acceptance criteria.
 4. Go code checks the draft; a failure goes back to the same planner session a bounded number of times.
-5. A passing plan is written as task lists, and the Intake Handler publishes run-start for them.
+5. A passing plan is written to Komodo's home folder, and `komodo plan` prints its path and id and stops.
+6. A person or the orchestrator may edit the plan, then starts it with `komodo run <plan id>`; the checks rerun, and a broken edit is refused.
 
 #### 6.4 Errors, Limits and Blocks
 
