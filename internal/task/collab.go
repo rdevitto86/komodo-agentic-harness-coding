@@ -119,7 +119,7 @@ type Git interface {
 	AddWorktree(
 		ctx context.Context,
 		l LeaseRef,
-	) error // creates l.Branch and checks it out at l.Worktree
+	) error // creates l.Worktree detached at the epic branch tip, with no branch
 }
 
 // PointerRecorder is implemented by a Git that records the worktree's .git pointer when the group starts.

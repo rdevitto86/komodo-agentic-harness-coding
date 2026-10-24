@@ -37,7 +37,7 @@ func newGitRepo(t *testing.T) gitRepo {
 	git(t, r.Main, "commit", "-q", "-m", "first")
 	wt := filepath.Join(base, "wt")
 	git(t, r.Main, "worktree", "add", "-q", "-b", "komodo/ep-1-tg-1", wt)
-	r.Lease = LeaseRef{Branch: "komodo/ep-1-tg-1", Worktree: wt, GitDir: filepath.Join(r.Main, ".git", "worktrees", "wt")}
+	r.Lease = LeaseRef{Worktree: wt, GitDir: filepath.Join(r.Main, ".git", "worktrees", "wt")}
 	return r
 }
 

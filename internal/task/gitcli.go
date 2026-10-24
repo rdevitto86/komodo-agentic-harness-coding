@@ -12,7 +12,7 @@ import (
 // GitCLI is the Git the Task Manager calls, over the host git runner and its rules.
 type GitCLI struct {
 	Repo  string // the main repository folder; new worktrees are cut from it
-	Start string // start point of a new group branch: the tip of the epic's branch
+	Start string // start point of a new detached group worktree: the tip of the epic's branch
 	Base  string // the commit the group's diff is taken against; HEAD when empty
 
 	mu    sync.Mutex
@@ -84,8 +84,7 @@ func (g *GitCLI) ResetTracked(ctx context.Context, l LeaseRef) error {
 	return err
 }
 
-// AddWorktree creates the lease's branch at the start point and checks it out at the lease's worktree, unless the worktree
-// exists.
+// AddWorktree creates the lease's worktree detached at the start point, with no branch, unless the worktree exists.
 func (g *GitCLI) AddWorktree(ctx context.Context, l LeaseRef) error {
 	if _, err := os.Stat(filepath.Join(l.Worktree, ".git")); err == nil {
 		return nil
@@ -123,15 +122,14 @@ func (g *GitCLI) AddWorktree(ctx context.Context, l LeaseRef) error {
 		"worktree",
 		"add",
 		"-q",
-		"-b",
-		l.Branch,
+		"--detach",
 		l.Worktree,
 	}
 	if g.Start != "" {
 		argv = append(argv, g.Start)
 	}
 	if _, err := hostOutput(ctx, g.Repo, env, "git add worktree", hostTimeout, argv...); err != nil {
-		return fmt.Errorf("add the worktree of %s: %w", l.Branch, err)
+		return fmt.Errorf("add the detached worktree %s: %w", l.Worktree, err)
 	}
 
 	return nil

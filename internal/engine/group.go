@@ -187,7 +187,6 @@ func (g *group) begin() bool {
 			Time:  g.now(),
 			Data: mustJSON(LeaseGrant{
 				Fence:    uint64(l.Fence),
-				Branch:   l.Branch,
 				Worktree: l.Worktree,
 			}),
 		},

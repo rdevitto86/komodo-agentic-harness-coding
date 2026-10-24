@@ -34,7 +34,6 @@ type TaskSpec struct {
 
 // LeaseRef is the lease's record for one group.
 type LeaseRef struct {
-	Branch   string `json:"branch"`
 	Worktree string `json:"worktree"` // absolute path
 	GitDir   string `json:"git_dir"`  // this worktree's own git folder, absolute path
 	Fence    int64  `json:"fence"`    // rising number that proves the lease is current

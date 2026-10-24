@@ -134,9 +134,9 @@ func TestPublishRecheckSurvivesFailedReport(t *testing.T) {
 	}
 }
 
-// A group or epic branch equal to the resolved base branch is refused before anything is written.
+// An epic branch equal to the resolved base branch is refused before anything is written.
 func TestBaseBranchEqualRefused(t *testing.T) {
-	for _, base := range []string{"komodo/ep-1", "komodo/ep-1-tg-1.1"} {
+	for _, base := range []string{"komodo/ep-1"} {
 		w := newWorld(t)
 		h := w.handler()
 		h.Config.BaseBranch = base

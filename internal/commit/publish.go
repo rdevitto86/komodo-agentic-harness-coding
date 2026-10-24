@@ -47,15 +47,15 @@ func (h *Handler) Publish(ctx context.Context, a Approval) (Result, error) {
 	return p.land(ctx)
 }
 
-// validate refuses an approval whose verdicts disagree or whose names would leave the komodo/
+// validate refuses an approval whose verdicts disagree or whose epic name would leave the komodo/
 // branches.
 func (p *publication) validate() error {
 	a := p.a
-	if !validBranch(a.Branch) || !validBranch(p.epic) || strings.ContainsAny(a.Epic, "/\\") {
+	if !validBranch(p.epic) || strings.ContainsAny(a.Epic, "/\\") {
 		return fail(
 			KindCriticalRef,
 			false,
-			fmt.Errorf("branch %q or epic %q: %w", a.Branch, a.Epic, ErrCriticalRef),
+			fmt.Errorf("epic %q: %w", a.Epic, ErrCriticalRef),
 		)
 	}
 
@@ -78,8 +78,8 @@ func (p *publication) validate() error {
 	return nil
 }
 
-// settle resolves the base branch and the remote, refuses a group or epic branch that is the base
-// branch, and picks the landing worktree path.
+// settle resolves the base branch and the remote, refuses an epic branch that is the base branch,
+// and picks the landing worktree path.
 func (p *publication) settle(ctx context.Context) error {
 	cfg := p.h.settings()
 	p.base, p.remote = cfg.BaseBranch, cfg.Remote
@@ -94,11 +94,11 @@ func (p *publication) settle(ctx context.Context) error {
 		return err
 	}
 
-	if p.base == p.a.Branch || p.base == p.epic {
+	if p.base == p.epic {
 		return fail(
 			KindCriticalRef,
 			false,
-			fmt.Errorf("base branch %q is a group or epic branch: %w", p.base, ErrCriticalRef),
+			fmt.Errorf("base branch %q is the epic branch: %w", p.base, ErrCriticalRef),
 		)
 	}
 
@@ -114,10 +114,10 @@ func (p *publication) tracking(branch string) string {
 // local names a local branch in full, so a tag of the same short name cannot win.
 func (p *publication) local(branch string) string { return "refs/heads/" + branch }
 
-// commit records the approved tree on the group branch unless a commit already holds it.
+// commit records the approved tree in the detached worktree unless a commit already holds it.
 func (p *publication) commit(ctx context.Context) error {
 	g, a := p.h.Git, p.a
-	if err := p.onGroupBranch(ctx); err != nil {
+	if err := p.h.detached(ctx, a.Worktree); err != nil {
 		return err
 	}
 
@@ -153,23 +153,6 @@ func (p *publication) commit(ctx context.Context) error {
 	}
 
 	return notApproved
-}
-
-// onGroupBranch refuses a worktree that does not have the approved group branch checked out.
-func (p *publication) onGroupBranch(ctx context.Context) error {
-	cur, err := p.h.Git.CurrentBranch(ctx, p.a.Worktree)
-	if err != nil {
-		return gitFail(err)
-	}
-
-	if cur != p.a.Branch {
-		return fail(
-			KindNotApproved,
-			false,
-			fmt.Errorf("worktree is on %s, approved %s: %w", cur, p.a.Branch, ErrNotApproved),
-		)
-	}
-	return nil
 }
 
 // holdsApproved reports whether the approved commit lies behind HEAD through only this group's
@@ -367,12 +350,12 @@ func (p *publication) addLanding(ctx context.Context, base string) error {
 	return nil
 }
 
-// merge brings the local epic branch into the group branch, then squashes the verified group tip into the epic branch in the
-// landing worktree as one commit, and returns that commit's id. The lease is read again just before, so a stale holder never
-// lands.
+// merge brings the local epic branch into the detached worktree, then squashes the verified group tip into the epic branch in
+// the landing worktree as one commit, and returns that commit's id. The lease is read again just before, so a stale holder
+// never lands.
 func (p *publication) merge(ctx context.Context) (string, error) {
 	g, a := p.h.Git, p.a
-	if err := p.onGroupBranch(ctx); err != nil {
+	if err := p.h.detached(ctx, a.Worktree); err != nil {
 		return "", err
 	}
 
@@ -478,7 +461,6 @@ func (p *publication) finish(ctx context.Context, res Result) (Result, error) {
 		Run:      a.Run,
 		Group:    a.Group,
 		Epic:     a.Epic,
-		Branch:   a.Branch,
 		Tip:      tip,
 		Landed:   res.Landed,
 		Into:     p.epic,

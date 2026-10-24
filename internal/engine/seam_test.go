@@ -25,7 +25,7 @@ func (realTasks) Start(ctx context.Context, spec GroupSpec, h cache.Handle) (Cha
 	}
 	m, err := task.New(task.GroupSpec{
 		Run: spec.Run, Group: spec.Label, Tasks: tasks, Files: spec.Files, OtherFiles: spec.OtherFiles,
-		Lease: task.LeaseRef{Branch: spec.Lease.Branch, Worktree: spec.Lease.Worktree, Fence: int64(spec.Lease.Fence)},
+		Lease: task.LeaseRef{Worktree: spec.Lease.Worktree, Fence: int64(spec.Lease.Fence)},
 	}, task.Collaborators{Cache: h})
 	if err != nil {
 		return Channels{}, err

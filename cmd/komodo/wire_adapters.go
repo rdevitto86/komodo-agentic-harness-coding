@@ -169,7 +169,6 @@ func (p publishedAdapter) Complete(ctx context.Context, pub commit.Published) er
 		Run:      string(pub.Run),
 		Group:    string(pub.Group),
 		Epic:     pub.Epic,
-		Branch:   pub.Branch,
 		Tip:      pub.Tip,
 		Landed:   pub.Landed,
 		Into:     pub.Into,

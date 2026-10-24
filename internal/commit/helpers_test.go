@@ -75,19 +75,17 @@ func (w *world) handler() *Handler {
 	}
 }
 
-// newGroup cuts the group branch from the epic tip, adds its worktree and takes its lease.
+// newGroup adds a detached worktree at the epic tip and takes its lease.
 func (w *world) newGroup(label string) group {
 	w.t.Helper()
 	g := group{
-		id:     "g-" + label,
-		label:  label,
-		branch: "komodo/ep-1-" + label,
-		wt:     filepath.Join(w.root, "wt", label),
-		fence:  3,
+		id:    "g-" + label,
+		label: label,
+		wt:    filepath.Join(w.root, "wt", label),
+		fence: 3,
 	}
-	if err := w.git.AddWorktree(w.ctx, w.clone, g.wt, g.branch, "komodo/ep-1"); err != nil {
-		w.t.Fatal(err)
-	}
+	git(w.t, w.clone, "worktree", "add", "--detach", "-q", g.wt, "komodo/ep-1")
+	w.git.Adopt(w.clone)
 	w.leases.set(g, "run-1", w.clone)
 	return g
 }
@@ -104,7 +102,7 @@ func (w *world) approval(g group, groups ...string) Approval {
 	}
 	return Approval{
 		Run: "run-1", Group: bus.ID(g.id), Repo: "repo", Epic: "ep-1", Label: g.label, EpicGroups: groups,
-		Goal: "Goal of " + g.label, Worktree: g.wt, Branch: g.branch, Fence: g.fence, Tree: tree,
+		Goal: "Goal of " + g.label, Worktree: g.wt, Fence: g.fence, Tree: tree,
 		QA:       Verdict{Tree: tree, Summary: []string{"14 tests pass"}},
 		Reviewer: Verdict{Tree: tree, Summary: []string{"0 blocking findings"}},
 		Facts:    PRFacts{DiffStat: "1 file changed", TasksClosed: []string{"tsk-" + g.label}},
@@ -156,8 +154,8 @@ func (w *world) land(h *Handler, label string, groups ...string) (Approval, Resu
 
 // group is one group's identity and checkout.
 type group struct {
-	id, label, branch, wt string
-	fence                 lease.Fence
+	id, label, wt string
+	fence         lease.Fence
 }
 
 // fakeLeases serves leases from a map.
@@ -197,7 +195,6 @@ func (f *fakeLeases) set(g group, run, clone string) {
 		State:     lease.StateHeld,
 		ClonePath: clone,
 		Worktree:  g.wt,
-		Branch:    g.branch,
 	}
 }
 

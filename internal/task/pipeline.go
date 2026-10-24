@@ -335,7 +335,6 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 				Label:    m.spec.Group,
 				Task:     id,
 				Worktree: m.spec.Lease.Worktree,
-				Branch:   m.spec.Lease.Branch,
 				Fence:    lease.Fence(m.spec.Lease.Fence),
 			},
 		)
@@ -616,7 +615,6 @@ func (m *Manager) saveDirty(ctx context.Context) error {
 			Label:    m.spec.Group,
 			Task:     m.spec.Tasks[len(m.spec.Tasks)-1].ID,
 			Worktree: m.spec.Lease.Worktree,
-			Branch:   m.spec.Lease.Branch,
 			Fence:    lease.Fence(m.spec.Lease.Fence),
 		},
 	)
@@ -1003,7 +1001,6 @@ func (m *Manager) runCommit(ctx context.Context) error {
 		EpicGroups: m.c.Meta.EpicGroups,
 		Goal:       m.c.Meta.Goal,
 		Worktree:   m.spec.Lease.Worktree,
-		Branch:     m.spec.Lease.Branch,
 		Fence: lease.Fence(
 			m.spec.Lease.Fence,
 		),

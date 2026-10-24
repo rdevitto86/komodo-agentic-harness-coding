@@ -316,7 +316,6 @@ func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[strin
 		OtherFiles: spec.OtherFiles,
 		Agents:     perms,
 		Lease: task.LeaseRef{
-			Branch:   spec.Lease.Branch,
 			Worktree: spec.Lease.Worktree,
 			GitDir:   filepath.Join(k.common, "worktrees", filepath.Base(spec.Lease.Worktree)),
 			Fence:    int64(spec.Lease.Fence),

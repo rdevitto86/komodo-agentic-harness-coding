@@ -14,7 +14,6 @@ func saveReq(g group, task string) SaveRequest {
 		Label:    g.label,
 		Task:     task,
 		Worktree: g.wt,
-		Branch:   g.branch,
 		Fence:    g.fence,
 	}
 }
@@ -33,10 +32,10 @@ func TestSaveCommitsLocallyAndPushesNothing(t *testing.T) {
 	if !res.Saved || res.Head == "" || res.Tree == "" {
 		t.Fatalf("result = %+v", res)
 	}
-	if got := git(t, w.clone, "rev-parse", g.branch); got != res.Head {
+	if got := git(t, g.wt, "rev-parse", "HEAD"); got != res.Head {
 		t.Fatalf("branch tip = %s, want %s", got, res.Head)
 	}
-	if subj := git(t, w.clone, "log", "-1", "--format=%s", g.branch); subj != "tg-1.1: tsk-1.1.1" {
+	if subj := git(t, g.wt, "log", "-1", "--format=%s", "HEAD"); subj != "tg-1.1: tsk-1.1.1" {
 		t.Fatalf("subject = %q", subj)
 	}
 	if after := git(t, w.remote, "for-each-ref"); after != remoteBefore {
@@ -80,7 +79,7 @@ func TestSaveRefusesLostLease(t *testing.T) {
 	g := w.newGroup("tg-1.1")
 	h := w.handler()
 	w.work(g, "a.txt", "a")
-	before := git(t, w.clone, "rev-parse", g.branch)
+	before := git(t, g.wt, "rev-parse", "HEAD")
 	w.leases.bump(g.id, 4)
 	_, err := h.Save(w.ctx, saveReq(g, "tsk-1.1.1"))
 	var pe *PublishError
@@ -96,26 +95,39 @@ func TestSaveRefusesLostLease(t *testing.T) {
 	if _, err := h.Save(w.ctx, saveReq(g, "tsk-1.1.1")); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("no lease err = %v", err)
 	}
-	if after := git(t, w.clone, "rev-parse", g.branch); after != before {
+	if after := git(t, g.wt, "rev-parse", "HEAD"); after != before {
 		t.Fatalf("branch moved %s -> %s", before, after)
 	}
 }
 
-// Save refuses a branch outside komodo/ before git runs.
-func TestSaveRefusesCriticalBranch(t *testing.T) {
+// Save refuses a worktree that has a branch checked out and commits nothing.
+func TestSaveRefusesWorktreeWithBranch(t *testing.T) {
 	w := newWorld(t)
 	g := w.newGroup("tg-1.1")
 	h := w.handler()
 	w.work(g, "a.txt", "a")
-	r := saveReq(g, "tsk-1.1.1")
-	r.Branch = "main"
-	n := len(w.traced)
-	_, err := h.Save(w.ctx, r)
+	git(t, g.wt, "checkout", "-q", "-b", "komodo/stray")
+	before := git(t, g.wt, "rev-parse", "HEAD")
+	_, err := h.Save(w.ctx, saveReq(g, "tsk-1.1.1"))
 	var pe *PublishError
-	if !errors.Is(err, ErrCriticalRef) || !errors.As(err, &pe) || pe.Kind != KindCriticalRef {
+	if !errors.Is(err, ErrNotApproved) || !errors.As(err, &pe) || pe.Kind != KindNotApproved {
 		t.Fatalf("err = %v", err)
 	}
-	if len(w.traced) != n {
-		t.Fatalf("git ran: %v", w.traced[n:])
+	if after := git(t, g.wt, "rev-parse", "HEAD"); after != before {
+		t.Fatalf("a commit was made: %s -> %s", before, after)
+	}
+}
+
+// Save refuses a worktree on a branch outside komodo/ the same way.
+func TestSaveRefusesOtherBranch(t *testing.T) {
+	w := newWorld(t)
+	g := w.newGroup("tg-1.1")
+	h := w.handler()
+	w.work(g, "a.txt", "a")
+	git(t, g.wt, "checkout", "-q", "-b", "stray")
+	_, err := h.Save(w.ctx, saveReq(g, "tsk-1.1.1"))
+	var pe *PublishError
+	if !errors.Is(err, ErrNotApproved) || !errors.As(err, &pe) || pe.Kind != KindNotApproved {
+		t.Fatalf("err = %v", err)
 	}
 }

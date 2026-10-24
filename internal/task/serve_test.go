@@ -22,7 +22,7 @@ func newServeRig(t *testing.T, stage state.Stage) *serveRig {
 	spec := GroupSpec{
 		Run:   "run-1",
 		Group: "tg-1",
-		Lease: LeaseRef{Branch: "b", Worktree: t.TempDir()},
+		Lease: LeaseRef{Worktree: t.TempDir()},
 		Saved: &Progress{Stage: stage},
 	}
 	m, err := New(spec, Collaborators{})

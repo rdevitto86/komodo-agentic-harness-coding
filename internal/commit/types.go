@@ -15,13 +15,12 @@ type SaveRequest struct {
 	Label    string      `json:"label"`    // group label, such as tg-1.2
 	Task     string      `json:"task"`     // finished task name, such as tsk-1.2.1
 	Worktree string      `json:"worktree"` // path of the group's worktree
-	Branch   string      `json:"branch"`   // group branch
 	Fence    lease.Fence `json:"fence"`    // fence of the lease the Task Manager holds
 }
 
 // SaveResult is what Save returns.
 type SaveResult struct {
-	Head  string `json:"head"`  // commit id at the group branch tip after the save
+	Head  string `json:"head"`  // commit id at the worktree HEAD after the save
 	Tree  string `json:"tree"`  // tree hash of that commit
 	Saved bool   `json:"saved"` // false when the tip already held the worktree's content
 }
@@ -42,7 +41,6 @@ type Approval struct {
 	EpicGroups []string    `json:"epic_groups"` // labels of every group of the epic
 	Goal       string      `json:"goal"`        // the group goal; title of the commit
 	Worktree   string      `json:"worktree"`    // path of the group's worktree
-	Branch     string      `json:"branch"`      // group branch
 	Fence      lease.Fence `json:"fence"`       // fence of the lease the Task Manager holds
 	Tree       string      `json:"tree"`        // tree hash both agents approved
 	QA         Verdict     `json:"qa"`
@@ -104,8 +102,7 @@ type Published struct {
 	Run      bus.ID `json:"run"`
 	Group    bus.ID `json:"group"`
 	Epic     string `json:"epic"`     // epic label, such as ep-1
-	Branch   string `json:"branch"`   // group branch that was landed
-	Tip      string `json:"tip"`      // commit id at the group branch tip
+	Tip      string `json:"tip"`      // commit id at the worktree HEAD
 	Landed   string `json:"landed"`   // the commit on the epic branch that holds the same tree as Tip
 	Into     string `json:"into"`     // local epic branch whose history must hold Landed
 	Worktree string `json:"worktree"` // path of the group's checkout

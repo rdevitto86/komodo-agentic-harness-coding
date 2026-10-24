@@ -39,7 +39,7 @@ func serveScript(t *testing.T, rt task.Runtime, inject <-chan task.Command) func
 	wt := t.TempDir()
 	return func(e *tmEnv) {
 		m, err := task.New(
-			task.GroupSpec{Run: e.spec.Run, Group: e.spec.Label, Lease: task.LeaseRef{Branch: "b", Worktree: wt}},
+			task.GroupSpec{Run: e.spec.Run, Group: e.spec.Label, Lease: task.LeaseRef{Worktree: wt}},
 			task.Collaborators{Runtime: rt, BeatEvery: 5 * time.Millisecond},
 		)
 		if err != nil {

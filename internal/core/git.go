@@ -92,14 +92,14 @@ func (g *Git) Adopt(clone string) {
 	g.clones = append(g.clones, ref)
 }
 
-// CurrentBranch returns the short name of the branch HEAD names in the worktree; a detached HEAD or a branch outside komodo/
-// is ErrCriticalRef.
+// CurrentBranch returns the short name of the branch HEAD names in the worktree, or "" for a detached HEAD; a branch outside
+// komodo/ is ErrCriticalRef.
 func (g *Git) CurrentBranch(ctx context.Context, worktree string) (string, error) {
 	t, err := g.locate(worktree)
 	if err != nil {
 		return "", err
 	}
-	return g.currentBranch(ctx, t)
+	return g.headBranch(ctx, t)
 }
 
 // locate finds the git folder of dir from the known clones: dir is a clone's working folder, or a worktree whose
@@ -220,6 +220,14 @@ func (g *Git) emptyHooks() string {
 		g.hooksDir = d
 	})
 	return g.hooksDir
+}
+
+// headBranch is currentBranch that accepts a detached HEAD and returns "" for it.
+func (g *Git) headBranch(ctx context.Context, t target) (string, error) {
+	if _, err := g.run(ctx, t, "", nil, "symbolic-ref", "-q", "HEAD"); err != nil && exitCode(err) == 1 {
+		return "", nil
+	}
+	return g.currentBranch(ctx, t)
 }
 
 // currentBranch returns the komodo/ branch HEAD names in the target.

@@ -11,16 +11,8 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 )
 
-// Save records a finished task's work as a local commit on the group branch; it never pushes.
+// Save records a finished task's work as a local commit in the group's detached worktree; it never pushes.
 func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error) {
-	if !validBranch(r.Branch) {
-		return SaveResult{}, fail(
-			KindCriticalRef,
-			false,
-			fmt.Errorf("group branch %q: %w", r.Branch, ErrCriticalRef),
-		)
-	}
-
 	l, err := h.owns(ctx, r.Repo, r.Group, r.Run, r.Fence)
 	if err != nil {
 		return SaveResult{}, err
@@ -28,16 +20,8 @@ func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error) {
 
 	h.adopt(l.ClonePath)
 
-	cur, err := h.Git.CurrentBranch(ctx, r.Worktree)
-	if err != nil {
-		return SaveResult{}, gitFail(err)
-	}
-	if cur != r.Branch {
-		return SaveResult{}, fail(
-			KindNotApproved,
-			false,
-			fmt.Errorf("worktree is on %s, not %s: %w", cur, r.Branch, ErrNotApproved),
-		)
+	if err := h.detached(ctx, r.Worktree); err != nil {
+		return SaveResult{}, err
 	}
 
 	before, _, herr := h.Git.Head(ctx, r.Worktree)
@@ -55,6 +39,26 @@ func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error) {
 	}
 
 	return SaveResult{Head: head, Tree: tree, Saved: head != before}, nil
+}
+
+// detached refuses a worktree that has any branch checked out, so a group's commits never move a branch.
+func (h *Handler) detached(ctx context.Context, worktree string) error {
+	cur, err := h.Git.CurrentBranch(ctx, worktree)
+	switch {
+	case errors.Is(err, ErrCriticalRef):
+		cur = "a branch outside komodo/"
+	case err != nil:
+		return gitFail(err)
+	}
+	if cur != "" {
+		return fail(
+			KindNotApproved,
+			false,
+			fmt.Errorf("worktree has %s checked out, not a detached HEAD: %w", cur, ErrNotApproved),
+		)
+	}
+
+	return nil
 }
 
 // adopt tells a Git that learns clones which clone holds a group's worktree.

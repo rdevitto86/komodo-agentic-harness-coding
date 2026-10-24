@@ -30,12 +30,12 @@ func TestPublishVerdictsDisagree(t *testing.T) {
 	w.work(g, "a.txt", "a")
 	a := w.approval(g, "tg-1.1")
 	a.Reviewer.Tree = strings.Repeat("a", 40)
-	before := git(t, w.clone, "rev-parse", g.branch)
+	before := git(t, g.wt, "rev-parse", "HEAD")
 	_, err := h.Publish(w.ctx, a)
 	if k, _ := peKind(err); !errors.Is(err, ErrNotApproved) || k != KindNotApproved {
 		t.Fatalf("err = %v", err)
 	}
-	if git(t, w.clone, "rev-parse", g.branch) != before || w.remoteTip("komodo/ep-1") == "" || len(w.gh.calls()) != 0 ||
+	if git(t, g.wt, "rev-parse", "HEAD") != before || w.remoteTip("komodo/ep-1") == "" || len(w.gh.calls()) != 0 ||
 		len(w.check.calls) != 0 {
 		t.Fatal("something was written or run")
 	}
@@ -49,12 +49,12 @@ func TestPublishWorktreeEditedAfterApproval(t *testing.T) {
 	w.work(g, "a.txt", "a")
 	a := w.approval(g, "tg-1.1")
 	w.work(g, "a.txt", "edited")
-	before := git(t, w.clone, "rev-parse", g.branch)
+	before := git(t, g.wt, "rev-parse", "HEAD")
 	_, err := h.Publish(w.ctx, a)
 	if !errors.Is(err, ErrNotApproved) {
 		t.Fatalf("err = %v", err)
 	}
-	if git(t, w.clone, "rev-parse", g.branch) != before {
+	if git(t, g.wt, "rev-parse", "HEAD") != before {
 		t.Fatal("a commit was made")
 	}
 	if len(w.rep.subtypes()) != 0 || len(w.clean.calls) != 0 {
@@ -102,7 +102,7 @@ func TestPublishThreeGroupsLandLocallyWithoutAPush(t *testing.T) {
 		t.Fatalf("cleanup: %d group calls, %d epic calls", len(w.clean.calls), len(w.clean.epics))
 	}
 	if c := w.clean.calls[2]; c.Into != "komodo/ep-1" || c.Landed != w.localTip() ||
-		c.Branch != "komodo/ep-1-tg-1.3" || c.Tip == "" {
+		c.Tip == "" {
 		t.Fatalf("published = %+v", c)
 	}
 	if git(t, w.clone, "rev-parse", w.clean.calls[0].Tip+"^{tree}") == "" {
@@ -328,21 +328,21 @@ func TestPublishReadsLiveSettings(t *testing.T) {
 	}
 }
 
-// Publish refuses a group branch outside komodo/ before any git runs.
-func TestPublishCriticalBranch(t *testing.T) {
+// Publish on a worktree with a branch checked out returns ErrNotApproved and lands nothing.
+func TestPublishWorktreeWithBranch(t *testing.T) {
 	w := newWorld(t)
 	h := w.handler()
 	g := w.newGroup("tg-1.1")
 	w.work(g, "a.txt", "a")
 	a := w.approval(g, "tg-1.1")
-	a.Branch = "main"
-	n := len(w.traced)
+	git(t, g.wt, "checkout", "-q", "-b", "komodo/stray")
+	before := w.localTip()
 	_, err := h.Publish(w.ctx, a)
-	if k, _ := peKind(err); !errors.Is(err, ErrCriticalRef) || k != KindCriticalRef {
+	if k, _ := peKind(err); !errors.Is(err, ErrNotApproved) || k != KindNotApproved {
 		t.Fatalf("err = %v", err)
 	}
-	if len(w.traced) != n {
-		t.Fatalf("git ran: %v", w.traced[n:])
+	if w.localTip() != before || len(w.clean.calls) != 0 {
+		t.Fatal("something landed")
 	}
 }
 

@@ -13,7 +13,6 @@ func TestGitCLIAddsTheWorktreeOnceHashesTheTreeAndResetsTrackedEdits(t *testing.
 	g := &GitCLI{Repo: r.Main, Base: "HEAD", Start: "main"}
 	t.Cleanup(func() { _ = g.Close() })
 	l := LeaseRef{
-		Branch:   "komodo/ep-1-tg-9",
 		Worktree: filepath.Join(filepath.Dir(r.Main), "wt9"),
 		GitDir:   filepath.Join(r.Main, ".git", "worktrees", "wt9"),
 	}
@@ -23,8 +22,14 @@ func TestGitCLIAddsTheWorktreeOnceHashesTheTreeAndResetsTrackedEdits(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if got := strings.TrimSpace(git(t, r.Main, "branch", "--list", "--format=%(refname:short)", l.Branch)); got != l.Branch {
-		t.Fatalf("branch list %q", got)
+	if got := strings.TrimSpace(git(t, l.Worktree, "branch", "--show-current")); got != "" {
+		t.Fatalf("worktree has branch %q checked out", got)
+	}
+	if head, tip := git(t, l.Worktree, "rev-parse", "HEAD"), git(t, r.Main, "rev-parse", "main"); head != tip {
+		t.Fatalf("worktree HEAD %q, epic tip %q", head, tip)
+	}
+	if got := strings.TrimSpace(git(t, r.Main, "branch", "--list", "komodo/ep-1-tg-9")); got != "" {
+		t.Fatalf("branch list %q, want none for the group", got)
 	}
 	if err := g.RecordPointer(l); err != nil {
 		t.Fatal(err)

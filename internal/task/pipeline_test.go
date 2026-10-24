@@ -39,8 +39,7 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 		t.Fatalf("Publish called %d times", len(pubs))
 	}
 	tree, _ := r.git.TreeHash(context.Background(), r.m.spec.Lease)
-	if pubs[0].Tree != tree || pubs[0].QA.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 ||
-		pubs[0].Branch != "komodo/tg-1" {
+	if pubs[0].Tree != tree || pubs[0].QA.Tree != tree || pubs[0].Reviewer.Tree != tree || pubs[0].Fence != 3 {
 		t.Fatalf("approval %+v, tree %s", pubs[0], tree)
 	}
 	if !slices.Equal(pubs[0].Facts.TasksClosed, []string{"t1"}) || len(pubs[0].QA.Summary) == 0 ||
@@ -428,7 +427,7 @@ func TestPassingTaskDoneSavesOnceAndANewTaskNeverPushes(t *testing.T) {
 	if r.cm.saveCount() != 1 || !slices.Equal(r.m.Progress().TasksDone, []string{"t1"}) {
 		t.Fatalf("saves %d, done %v", r.cm.saveCount(), r.m.Progress().TasksDone)
 	}
-	if s := r.cm.saves[0]; s.Task != "t1" || s.Repo != "repo-1" || s.Branch != "komodo/tg-1" || s.Fence != 3 {
+	if s := r.cm.saves[0]; s.Task != "t1" || s.Repo != "repo-1" || s.Fence != 3 {
 		t.Fatalf("save request %+v", s)
 	}
 }

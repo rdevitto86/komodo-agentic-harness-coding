@@ -26,7 +26,7 @@ func (g *Git) Commit(ctx context.Context, worktree, message string) (string, err
 	if err != nil {
 		return "", err
 	}
-	if _, err := g.currentBranch(ctx, t); err != nil {
+	if _, err := g.headBranch(ctx, t); err != nil {
 		return "", err
 	}
 	if _, err := g.run(ctx, t, "", nil, "add", "-A"); err != nil {
@@ -321,7 +321,7 @@ func (g *Git) Merge(ctx context.Context, dir, ref, message string, noFF bool) (s
 	if err != nil {
 		return "", err
 	}
-	if _, err := g.currentBranch(ctx, t); err != nil {
+	if _, err := g.headBranch(ctx, t); err != nil {
 		return "", err
 	}
 

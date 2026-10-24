@@ -79,6 +79,27 @@ func TestCommitRefusesTrailer(t *testing.T) {
 	}
 }
 
+// A detached worktree reports no branch and takes a commit and a merge.
+func TestDetachedWorktreeCommits(t *testing.T) {
+	w := newWorld(t)
+	wt := filepath.Join(w.root, "wt", "detached")
+	git(t, w.clone, "worktree", "add", "--detach", "-q", wt, "origin/komodo/ep-1")
+	w.git.Adopt(w.clone)
+	if cur, err := w.git.CurrentBranch(w.ctx, wt); err != nil || cur != "" {
+		t.Fatalf("CurrentBranch = %q, %v", cur, err)
+	}
+	write(t, wt, "d.txt", "d")
+	if _, err := w.git.Commit(w.ctx, wt, "tg-1: detached"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.git.Merge(w.ctx, wt, "origin/komodo/ep-1", "tg-1: merge", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := git(t, wt, "log", "-1", "--format=%s", "HEAD"); got != "tg-1: detached" {
+		t.Fatalf("subject = %q", got)
+	}
+}
+
 // Commit on a branch outside komodo/ is refused.
 func TestCommitRefusesCriticalBranch(t *testing.T) {
 	w := newWorld(t)

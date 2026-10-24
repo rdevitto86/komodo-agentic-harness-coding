@@ -16,7 +16,7 @@ type Git interface {
 	Head(ctx context.Context, worktree string) (commit, tree string, err error)
 	// Info describes one commit of the worktree: its id, tree, parents and subject.
 	Info(ctx context.Context, worktree, rev string) (CommitInfo, error)
-	// CurrentBranch returns the komodo/ branch the worktree has checked out.
+	// CurrentBranch returns the komodo/ branch the worktree has checked out, or "" for a detached HEAD.
 	CurrentBranch(ctx context.Context, worktree string) (string, error)
 	// Commit records the worktree's content as one commit on the checked-out branch and returns its
 	// id.
