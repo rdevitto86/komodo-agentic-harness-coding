@@ -13897,7 +13897,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|---|
 | [G-308](#g-308) | The epic pull request while a risky group is blocked or dropped | 15.5 |
 | [G-335](#g-335) | The `Outcome` value of a dropped group | 15.5 |
-| [G-336](#g-336) | The changelog fragment's folder, file name and how it reaches the remote | 15.1, 15.5 |
+| [G-336](#g-336) | The changelog fragment's folder and file name | 15.1, 15.5 |
 
 ## 16. Cleanup Handler
 
@@ -14251,7 +14251,7 @@ A crash or `stop` leaves the group's worktree, branch and container in place. `k
 1. `Discard` takes the Lease Manager's group lock when `Leases` offers one and refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first. It reads the lease again before every removal, and a live holder stops it with `ErrLeaseHeld`.
 2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too and drops unpublished work; a link in its place is unlinked, not followed. It then calls `CloseTaskGroup()`, which destroys the sandbox.
 3. It keeps the group's state record and events, and reports `group.discarded` with the reason. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
-4. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status, not in their own records, until `run` is given a plan that clears the wait.
+4. Dependent groups then block with the reason `dependency`, naming the discarded group, as [`abandon`](#abandon) describes.
 
 #### Choosing which versions to delete
 
@@ -16189,7 +16189,7 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-333"></a>G-333 | Prompt injection | Text an agent reads can carry instructions meant to hijack it: repository files, the documents and prompts the planner reads, test and tool output, and outside tool servers. No part of the design treats that text as data rather than instructions, and the Reviewer's `security` lens covers injection in code, not attacks on agents. Open: how each agent's brief marks untrusted text, which actions need a check before they run, and how an attempt is detected and reported | Owner decision | [6](#6-context-manager), [11](#11-task-manager), [14](#14-reviewer) |
 | <a id="g-334"></a>G-334 | Agent evaluations | Nothing re-tests the agents when a prompt, skill or model changes; golden files cover only the Output Formatter's text, and the per-agent scorecard looks back 30 days. Open: a fixed set of sample plans and groups, run before a release, whose pass rate, cost and time are compared with the last release | Owner decision | [18](#18-metrics-service) |
 | <a id="g-335"></a>G-335 | Dropped group outcome | `komodo run <plan id> <group> --deny` on a group blocked on `risky_change` records the group as dropped. Open: the `Outcome` value the group's record carries | Owner decision | [7](#7-runtime-manager), [15](#15-commit-handler) |
-| <a id="g-336"></a>G-336 | Changelog fragment location | The Commit Handler adds one fragment file to the feature branch when the plan's pull request is opened. Open: the fragment's folder and file name, and how the file reaches the remote | Owner decision | [15](#15-commit-handler) |
+| <a id="g-336"></a>G-336 | Changelog fragment location | The Commit Handler adds one fragment file to the feature branch when the plan's pull request is opened. Open: the fragment's folder and file name; the file reaches the remote with the feature branch push | Owner decision | [15](#15-commit-handler) |
 | <a id="g-337"></a>G-337 | Plan without a release | The plan header names the release with `release:`. Open: what lint does for a plan with no `release:` line | Owner decision | [5](#5-intake-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
