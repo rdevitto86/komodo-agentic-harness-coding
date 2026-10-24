@@ -681,6 +681,8 @@ type RequestRef struct {
 // RequestAccepted is the data of run-status / request.accepted.
 type RequestAccepted struct {
 	RequestRef
+	// labels of the high or critical groups a bulk approval landed
+	Risky []string `json:"risky,omitempty"`
 }
 
 // EventKey binds RequestAccepted to run-status / request.accepted.

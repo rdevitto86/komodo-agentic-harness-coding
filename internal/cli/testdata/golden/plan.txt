@@ -2,8 +2,8 @@ exit 0
 {
   "v": 1,
   "ok": true,
-  "verdict": "Plan started for the goal Add lease revocation.",
-  "report": "Plan started for the goal `Add lease revocation`.\n",
+  "verdict": "Plan plan-7f3a9c started for the goal Add lease revocation.",
+  "report": "Plan `plan-7f3a9c` started for the goal `Add lease revocation`.\n\nIt is written to `/plans/shop/plan-7f3a9c/plan.md`. To start it, run\n`komodo run plan-7f3a9c`.\n",
   "data": {
     "plan": "plan-7f3a9c",
     "path": "/plans/shop/plan-7f3a9c/plan.md"

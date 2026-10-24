@@ -117,3 +117,24 @@ func testRoles(t *testing.T) map[string]Role {
 }
 
 func result(s string) llm.Result { return llm.Result{Output: json.RawMessage(s)} }
+
+// A group whose tasks carry no acceptance criteria still gets a Quality Assurance brief; the acceptance section reads none.
+func TestQASlotsFillAnEmptyAcceptanceSectionWhenTheGroupHasNoCriteria(t *testing.T) {
+	roles, err := NewRoles(RoleConfig{
+		Group: "tg-1", Tasks: []TaskSpec{{ID: "t1", Title: "x", DoneWhen: "build"}}, Worktree: t.TempDir(),
+		Files: func() []string { return []string{"*.go"} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slots, err := roles["qa"].Slots(context.Background(), RoleInput{})
+	if err != nil || slots["acceptance"] != "none" {
+		t.Fatalf("acceptance slot %q, %v", slots["acceptance"], err)
+	}
+
+	slots, err = testRoles(t)["qa"].Slots(context.Background(), RoleInput{})
+	if err != nil || !strings.Contains(slots["acceptance"], "a1: works") {
+		t.Fatalf("acceptance slot %q, %v", slots["acceptance"], err)
+	}
+}

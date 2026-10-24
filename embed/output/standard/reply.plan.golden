@@ -1,1 +1,4 @@
-Plan started for the goal `add a retry limit to the planner`.
+Plan `plan-7f3a9c` started for the goal `add a retry limit to the planner`.
+
+It is written to `/plans/shop/plan-7f3a9c/plan.md`. To start it, run
+`komodo run plan-7f3a9c`.

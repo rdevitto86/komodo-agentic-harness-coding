@@ -1,1 +1,3 @@
-Answer {{.Answer}} recorded for {{.Group}}.
+Answer {{.Answer}} recorded for {{.Group}}.{{if .Risky}}
+
+**Landed risky groups:** {{range $i, $g := .Risky}}{{if $i}}, {{end}}{{$g}}{{end}}{{end}}

@@ -78,7 +78,16 @@ func (e *Engine) verbRun(ctx context.Context, w *connWriter, req Request) {
 				e.fail(w, req.ID, err)
 				return
 			}
-			e.done(w, req.ID, map[string]any{"plan": rc.Target, "groups": rc.Groups, "answer": rc.Answer})
+			e.done(
+				w,
+				req.ID,
+				map[string]any{
+					"plan":   rc.Target,
+					"groups": rc.Groups,
+					"answer": rc.Answer,
+					"risky":  e.m.TakeRisky(req.ID),
+				},
+			)
 			return
 		}
 

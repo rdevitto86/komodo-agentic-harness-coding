@@ -165,7 +165,7 @@ func blockedResult(sd StatusData) Result {
 
 	facts := format.NeedsFacts{
 		Code: b.Reason, Group: b.Group, Question: b.Question,
-		Fix: blockedFix(b.Group, b.Reason),
+		Fix: blockedFix(planOf(sd.Runs, b.RunID), b.Group, b.Reason),
 	}
 
 	return Result{
@@ -177,17 +177,31 @@ func blockedResult(sd StatusData) Result {
 	}
 }
 
-// blockedFix is the command that answers a block: --approve or --deny for needs_scope, --override for retries,
-// a plain run otherwise.
-func blockedFix(group, reason string) string {
+// blockedFix is the command that answers a block: --approve or --deny for needs_scope and risky_change, --override for
+// retries, a plain run otherwise.
+func blockedFix(plan, group, reason string) string {
 	if reason == "retries" {
 		return "komodo run " + group + " --override in a terminal, within 60 minutes"
 	}
 	if reason == "needs_scope" {
 		return "komodo run " + group + " --approve or --deny"
 	}
+	if reason == "risky_change" {
+		return "komodo run " + plan + " " + group + " --approve or --deny"
+	}
 
 	return "komodo run " + group
+}
+
+// planOf returns the target of the live run with the id, or a placeholder when no live run has it.
+func planOf(runs []RunRow, runID string) string {
+	for _, r := range runs {
+		if r.RunID == runID && r.Target != "" {
+			return r.Target
+		}
+	}
+
+	return "<plan id>"
 }
 
 // statusFacts turns the status into the tables reply.status prints.

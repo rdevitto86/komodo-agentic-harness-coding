@@ -19,7 +19,10 @@ type StopFacts struct {
 
 // PlanFacts feeds reply.plan.
 type PlanFacts struct {
-	Goal string `json:"goal"`
+	Goal  string `json:"goal"`
+	Plan  string `json:"plan"`  // the plan id the planner wrote
+	Path  string `json:"path"`  // the absolute path of plan.md
+	Start string `json:"start"` // the command that starts the plan
 }
 
 // ConfigRow is one setting as config get prints it.
@@ -71,6 +74,8 @@ type ScheduleFacts struct {
 type AnswerFacts struct {
 	Group  string `json:"group"`
 	Answer string `json:"answer"` // approve, deny or override
+	// labels of the high or critical groups the approval landed
+	Risky []string `json:"risky"`
 }
 
 // AbandonFacts feeds reply.abandon.

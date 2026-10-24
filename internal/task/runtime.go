@@ -30,6 +30,14 @@ type TaskSpec struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	DoneWhen string `json:"done_when"` // command class the builder's task_done reruns
+	// acceptance criteria; with no DoneWhen, task_done runs each criterion's Cmd
+	Criteria []Criterion `json:"criteria,omitempty"`
+}
+
+// Criterion is one acceptance criterion of a task.
+type Criterion struct {
+	Text string `json:"text"`
+	Cmd  string `json:"cmd,omitempty"` // empty leaves the criterion to Quality Assurance
 }
 
 // LeaseRef is the lease's record for one group.

@@ -24,6 +24,7 @@ type RunData struct {
 	Queued *QueuedRow `json:"queued,omitempty"` // with --schedule
 	Group  string     `json:"group,omitempty"`  // with --approve, --deny or --override
 	Answer string     `json:"answer,omitempty"` // approve, deny or override
+	Risky  []string   `json:"risky,omitempty"`  // with --approve: the high or critical groups it landed
 }
 
 // StopData is the data of reply.stop.
@@ -326,13 +327,20 @@ func runAnswer(c *Call) Result {
 		Data: &bus.RunContinue{Target: target, Groups: groups, Answer: answer, Minutes: minutes, Request: bus.ID(req.ID)},
 	}
 
-	if _, res := c.ask(req); res != nil {
+	frames, res := c.ask(req)
+	if res != nil {
 		return *res
 	}
+
+	var landed struct {
+		Risky []string `json:"risky"`
+	}
+	decodeFinal(frames, &landed)
+
 	return Result{
 		Shape: "reply.answer",
-		Facts: format.AnswerFacts{Group: named, Answer: answer},
-		Data:  RunData{Group: named, Answer: answer},
+		Facts: format.AnswerFacts{Group: named, Answer: answer, Risky: landed.Risky},
+		Data:  RunData{Group: named, Answer: answer, Risky: landed.Risky},
 	}
 }
 
@@ -485,7 +493,7 @@ func handlePlan(c *Call) Result {
 
 	return Result{
 		Shape: "reply.plan",
-		Facts: format.PlanFacts{Goal: pr.Goal},
+		Facts: format.PlanFacts{Goal: pr.Goal, Plan: d.Plan, Path: d.Path, Start: "komodo run " + d.Plan},
 		Data:  d,
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
@@ -334,7 +335,12 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 		return m.Override(ctx, rc.Target, firstOf(rc.Groups), string(rc.Request), rc.Minutes)
 	}
 	if rc.Answer != "" {
-		return m.Answer(rc.Target, rc.Groups, rc.Answer == "approve", string(rc.Request))
+		risky, err := m.AnswerNaming(rc.Target, rc.Groups, rc.Answer == "approve", string(rc.Request))
+		if len(risky) > 0 {
+			riskyLanded.Store(string(rc.Request), risky)
+		}
+
+		return err
 	}
 
 	gs := m.byPlan(rc.Target, rc.Groups...)
@@ -373,6 +379,21 @@ func (m *Manager) continueTarget(ctx context.Context, rc *bus.RunContinue, run s
 	}
 
 	return m.awaitContinues(ctx, pending)
+}
+
+// riskyLanded holds, per request, the labels of the high or critical groups an approval landed, until the reply takes them.
+var riskyLanded sync.Map
+
+// TakeRisky returns, and forgets, the labels of the high or critical groups the request's approval landed.
+func (m *Manager) TakeRisky(request string) []string {
+	v, ok := riskyLanded.LoadAndDelete(request)
+	if !ok {
+		return nil
+	}
+
+	l, _ := v.([]string)
+
+	return l
 }
 
 // groupsNamedIn words the groups a plan id and labels name, for a refusal.

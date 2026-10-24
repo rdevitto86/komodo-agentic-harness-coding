@@ -312,12 +312,7 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 		return 0, "the task already passed", nil
 	}
 
-	o, err := agent.TaskGate{
-		Run: m.runner("builder"),
-	}.Complete(
-		ctx,
-		agent.TaskRef{Group: m.spec.Group, Task: id, DoneCommand: task.DoneWhen},
-	)
+	o, err := m.completeTask(ctx, *task)
 	if err != nil {
 		return -1, "", err
 	}
@@ -355,6 +350,31 @@ func (m *Manager) finishTask(ctx context.Context, id string) (int, string, error
 	}
 
 	return 0, o.Output, nil
+}
+
+// completeTask runs the task's completion command. A task with none runs the cmd line of each criterion in order and stops
+// at the first failure; a criterion with no cmd line is left to Quality Assurance.
+func (m *Manager) completeTask(ctx context.Context, t TaskSpec) (agent.TaskOutcome, error) {
+	gate := agent.TaskGate{Run: m.runner("builder")}
+	if t.DoneWhen != "" || len(t.Criteria) == 0 {
+		return gate.Complete(ctx, agent.TaskRef{Group: m.spec.Group, Task: t.ID, DoneCommand: t.DoneWhen})
+	}
+
+	var out []string
+
+	for _, c := range t.Criteria {
+		if strings.TrimSpace(c.Cmd) == "" {
+			continue
+		}
+
+		o, err := gate.Complete(ctx, agent.TaskRef{Group: m.spec.Group, Task: t.ID, DoneCommand: c.Cmd})
+		if err != nil || o.ExitCode != 0 {
+			return o, err
+		}
+		out = append(out, o.Output)
+	}
+
+	return agent.TaskOutcome{Output: agent.CapOutput(strings.Join(out, "\n"), agent.GateOutputCap)}, nil
 }
 
 // spend charges one try of the group's budget for a true failure; a failure on the last try escalates retries.

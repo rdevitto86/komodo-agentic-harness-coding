@@ -1288,6 +1288,15 @@
       "properties": {
         "request": {
           "type": "string"
+        },
+        "risky": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [

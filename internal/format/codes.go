@@ -48,6 +48,7 @@ var blockReasons = []string{
 	"flap",
 	"retries",
 	"needs_scope",
+	"risky_change",
 	"context",
 	"setup",
 	"publish",

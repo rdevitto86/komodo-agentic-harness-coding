@@ -1,3 +1,7 @@
-Plan started.
+Plan `plan-7f3a9c` started.
 
 **Goal:** `add a retry limit to the planner`
+
+**Plan file:** `/plans/shop/plan-7f3a9c/plan.md`
+
+**Start it:** `komodo run plan-7f3a9c`

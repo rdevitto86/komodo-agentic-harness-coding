@@ -129,6 +129,10 @@ func (t *qaRole) Slots(_ context.Context, in RoleInput) (map[string]string, erro
 		"tasks":      t.cfg.taskList(),
 		"acceptance": strings.TrimRight(acc.String(), "\n"),
 	}
+	if acc.Len() == 0 {
+		// the slot is required, so a group with no criteria gets the brief's own empty reading
+		s["acceptance"] = "none"
+	}
 	if in.Diff != "" {
 		s["diff"] = in.Diff
 	}
