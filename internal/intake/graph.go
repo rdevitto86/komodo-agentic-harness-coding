@@ -8,9 +8,9 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/agent"
 )
 
-// Graph is the dependency graph of the task lists: groups are nodes, "must finish first" are edges.
+// Graph is the dependency graph of a plan: groups are nodes, "must finish first" are edges.
 type Graph struct {
-	Groups  []string            // group names in folder-name order
+	Groups  []string            // group labels in plan order
 	Deps    map[string][]string // group name -> groups that must finish first
 	Touches map[string][]string // group name -> its touches globs
 }
@@ -228,7 +228,7 @@ func (g Graph) waveOf() map[string]int {
 	return wave
 }
 
-// ordered returns every group, wave first and then folder-name order.
+// ordered returns every group, wave first and then plan order.
 func (g Graph) ordered() []string {
 	var out []string
 	for _, w := range g.Waves() {
@@ -237,41 +237,41 @@ func (g Graph) ordered() []string {
 	return out
 }
 
-// BuildGraph builds the dependency graph; a cycle is a failing graph finding. An unknown dependency, two groups with
-// overlapping touches and no order, and a long chain, a group all
-// others wait on or a group with many dependencies are findings too.
-func BuildGraph(epics []Epic, tracked []string) (Graph, []Finding) {
-	g, found := buildGraph(epics, tracked)
+// BuildGraph builds the dependency graph of a plan; a cycle is a failing graph finding. An unknown dependency, two groups
+// with overlapping touches and no order, and a long chain, a group all others wait on or a group with many dependencies
+// are findings too.
+func BuildGraph(b Blueprint, tracked []string) (Graph, []Finding) {
+	g, found := buildGraph(planNodes(b), tracked)
 	return g, strip(found)
 }
 
-// Pending returns the labels of every group under target whose status is not done, in dependency order; target is all, an
-// epic label or a group label.
-func Pending(epics []Epic, g Graph, target string) []string {
-	inScope := map[string]bool{}
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			if gr.Status == "done" {
-				continue
-			}
-			if target == "all" || target == gr.Name || target == fmt.Sprintf("ep-%d", e.Number) {
-				inScope[gr.Name] = true
-			}
-		}
-	}
+// node is one group as the graph, wave isolation and case-collision checks see it.
+type node struct {
+	name    string   // group label
+	path    string   // path a finding about the group names
+	touches []string // touches globs
+	files   []string // files the group may write
+	deps    []string // labels of groups that must finish first
+}
 
-	out := []string{}
-	for _, n := range g.ordered() {
-		if inScope[n] {
-			out = append(out, n)
-		}
+// planNodes returns every group of the plan as a graph node.
+func planNodes(b Blueprint) []node {
+	out := make([]node, 0, len(b.Groups))
+	for _, g := range b.Groups {
+		out = append(out, node{
+			name:    g.Name,
+			path:    "plan.md#" + g.Name,
+			touches: g.Touches,
+			files:   g.Files,
+			deps:    g.Dependencies,
+		})
 	}
 
 	return out
 }
 
 // buildGraph builds the graph and returns each finding with every group it names.
-func buildGraph(epics []Epic, tracked []string) (Graph, []scoped) {
+func buildGraph(nodes []node, tracked []string) (Graph, []scoped) {
 	const maxDependencies = 5 // dependencies of one group before lint warns
 
 	g := Graph{Deps: map[string][]string{}, Touches: map[string][]string{}}
@@ -280,45 +280,38 @@ func buildGraph(epics []Epic, tracked []string) (Graph, []scoped) {
 	var files []string
 	files = append(files, tracked...)
 
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			g.Groups = append(g.Groups, gr.Name)
-			paths[gr.Name] = groupPath(e.Number, gr.Name)
-			g.Touches[gr.Name] = gr.Touches
-			files = append(files, gr.Files...)
-		}
+	for _, n := range nodes {
+		g.Groups = append(g.Groups, n.name)
+		paths[n.name] = n.path
+		g.Touches[n.name] = n.touches
+		files = append(files, n.files...)
 	}
 
 	var found []scoped
 
-	for _, e := range epics {
-		for _, gr := range e.Groups {
-			g.Deps[gr.Name] = []string{}
-			for _, d := range gr.Dependencies {
-				if _, ok := paths[d]; !ok {
-					found = append(found, graphFinding(
-						SeverityFail,
-						paths[gr.Name],
-						fmt.Sprintf("%s depends on %s, which is not a group", gr.Name, d),
-						gr.Name,
-					))
-					continue
-				}
-
-				g.Deps[gr.Name] = append(g.Deps[gr.Name], d)
-			}
-
-			if n := len(gr.Dependencies); n > maxDependencies {
+	for _, n := range nodes {
+		g.Deps[n.name] = []string{}
+		for _, d := range n.deps {
+			if _, ok := paths[d]; !ok {
 				found = append(found, graphFinding(
-					SeverityWarn,
-					paths[gr.Name],
-					fmt.Sprintf(
-						"%s has %d dependencies; more than %d",
-						gr.Name, n, maxDependencies,
-					),
-					gr.Name,
+					SeverityFail,
+					n.path,
+					fmt.Sprintf("%s depends on %s, which is not a group", n.name, d),
+					n.name,
 				))
+				continue
 			}
+
+			g.Deps[n.name] = append(g.Deps[n.name], d)
+		}
+
+		if c := len(n.deps); c > maxDependencies {
+			found = append(found, graphFinding(
+				SeverityWarn,
+				n.path,
+				fmt.Sprintf("%s has %d dependencies; more than %d", n.name, c, maxDependencies),
+				n.name,
+			))
 		}
 	}
 

@@ -2,6 +2,8 @@ package intake
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -49,8 +51,6 @@ type scoped struct {
 	groups []string
 }
 
-const backlogDir = "docs/backlog"
-
 // pointScale holds the allowed story points.
 var pointScale = []int{1, 2, 3, 5, 8}
 
@@ -62,43 +62,74 @@ var (
 	hasShall  = regexp.MustCompile(`\bSHALL\b`)
 )
 
-// Lint runs the eight checks on the loaded task lists and returns their findings. tracked is every tracked file of the base
-// commit; it feeds the case-collision and overlapping-glob checks.
-func Lint(epics []Epic, protected, tracked []string) []Finding {
-	return sortFindings(strip(lintAll(epics, protected, tracked)))
+// Lint runs the eight checks on a stored plan and returns their findings. tracked is every tracked file of the base commit;
+// it feeds the case-collision and overlapping-glob checks. A stored plan must carry its plan id.
+func Lint(b Blueprint, protected, tracked []string) []Finding {
+	return lintPlan(b, true, protected, tracked)
 }
 
-// LintDraft parses a draft in memory and runs the same checks as Lint. existing holds the stored epics: a draft group
-// replaces the stored group of the same name, and only findings about draft
-// groups come back.
-func LintDraft(d PlanDraft, existing []Epic, protected, tracked []string) []Finding {
-	if len(d.Files) == 0 {
-		return []Finding{grammar("", "draft has no files")}
+// LintDraft parses a planner draft in memory and runs the same checks as Lint. A draft of a new plan leaves the plan id out,
+// and a draft that amends a plan carries the id of existing; any other id is a grammar finding. A new group must take the
+// next number after the groups of existing.
+func LintDraft(d PlanDraft, existing Blueprint, protected, tracked []string) []Finding {
+	i := slices.IndexFunc(d.Files, func(f DraftFile) bool { return f.Path == "plan.md" })
+	if i < 0 {
+		return []Finding{grammar("plan.md", "draft has no plan.md")}
 	}
 
-	epics, found := parseFiles(d.Files, true)
-	drafted := map[string]bool{}
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			drafted[g.Name] = true
+	b, found := Parse(d.Files[i].Content)
+	if b.Plan != "" && b.Plan != existing.Plan {
+		found = append(found, grammar(
+			"plan.md",
+			fmt.Sprintf("id %s is not the id of the plan being amended; a new plan leaves id out", b.Plan),
+		))
+	}
+
+	found = append(found, numberFindings(existing, b)...)
+
+	return mergeFindings(found, lintPlan(b, false, protected, tracked))
+}
+
+// Approve reads plan.md of a stored plan, runs Lint on it, rewrites blueprint.json from it with each group's card hash and
+// returns the blueprint. A failing finding refuses the plan: the zero blueprint comes back and blueprint.json stays as it was.
+func Approve(home, repo, plan string, protected, tracked []string) (Blueprint, []Finding, error) {
+	if err := checkPlanName(repo, plan); err != nil {
+		return Blueprint{}, nil, err
+	}
+
+	data, err := os.ReadFile(filepath.Join(PlanDir(home, repo, plan), "plan.md"))
+	if err != nil {
+		return Blueprint{}, nil, fmt.Errorf("read the plan.md of %s: %w", plan, err)
+	}
+
+	text := string(data)
+	b, found := Parse(text)
+	b.Repo = repo
+
+	if b.Plan != "" && b.Plan != plan {
+		found = append(found, grammar("plan.md", fmt.Sprintf("id %s is not the plan folder %s", b.Plan, plan)))
+	}
+
+	found = mergeFindings(found, Lint(b, protected, tracked))
+	if len(failing(found)) > 0 {
+		return Blueprint{}, found, nil
+	}
+
+	for i, g := range b.Groups {
+		if b.Groups[i].Hash, err = CardHash(text, g); err != nil {
+			return Blueprint{}, nil, fmt.Errorf("hash group %s: %w", g.Name, err)
 		}
 	}
 
-	merged := mergeEpics(existing, epics)
-	found = append(found, numberFindings(existing, epics)...)
-
-	all := append(lintAll(merged, protected, tracked), duplicateIDs(merged)...)
-	for _, f := range all {
-		if slices.ContainsFunc(f.groups, func(n string) bool { return drafted[n] }) {
-			found = append(found, f.Finding)
-		}
+	if err := WriteBlueprint(home, b); err != nil {
+		return Blueprint{}, nil, err
 	}
 
-	return sortFindings(found)
+	return b, found, nil
 }
 
 // OverEstimate warns when a task's real changed lines exceed twice its estimate.
-func OverEstimate(t Task, actualLines int) (Finding, bool) {
+func OverEstimate(t PlanTask, actualLines int) (Finding, bool) {
 	const overEstimateFold = 2
 	if actualLines <= overEstimateFold*t.EstimateLines {
 		return Finding{}, false
@@ -107,7 +138,7 @@ func OverEstimate(t Task, actualLines int) (Finding, bool) {
 	return Finding{
 		Rule:     RuleSizing,
 		Severity: SeverityWarn,
-		Path:     t.Name + ".md",
+		Path:     "plan.md",
 		Message: fmt.Sprintf(
 			"task %s changed %d lines against an estimate of %d",
 			t.Name, actualLines, t.EstimateLines,
@@ -124,28 +155,55 @@ func strip(in []scoped) []Finding {
 	return out
 }
 
-// lintAll runs every check and returns the findings with the groups each concerns.
-func lintAll(epics []Epic, protected, tracked []string) []scoped {
-	var out []scoped
-	add := func(f Finding, groups ...string) { out = append(out, scoped{f, groups}) }
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			lintGroup(e.Number, g, protected, add)
+// mergeFindings joins finding lists, drops a finding that repeats an earlier one and sorts the rest.
+func mergeFindings(lists ...[]Finding) []Finding {
+	seen := map[Finding]bool{}
+	out := []Finding{}
+
+	for _, l := range lists {
+		for _, f := range l {
+			if !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
 		}
 	}
 
-	graph, gf := buildGraph(epics, tracked)
-	out = append(out, gf...)
-	if graph.cycle() == nil {
-		waveIsolation(epics, graph, add)
+	return sortFindings(out)
+}
+
+// lintPlan runs every check on a plan. A stored plan must carry its plan id; a draft need not.
+func lintPlan(b Blueprint, stored bool, protected, tracked []string) []Finding {
+	var out []scoped
+	add := func(f Finding, groups ...string) { out = append(out, scoped{f, groups}) }
+
+	if stored && b.Plan == "" {
+		add(grammar("plan.md", "id is missing"))
 	}
 
-	caseCollisions(epics, tracked, add)
-	return out
+	if b.Release == "" {
+		add(required("plan.md", "release is missing or empty"))
+	}
+
+	for _, g := range b.Groups {
+		lintGroup(g, protected, add)
+	}
+
+	nodes := planNodes(b)
+	graph, gf := buildGraph(nodes, tracked)
+	out = append(out, gf...)
+	if graph.cycle() == nil {
+		waveIsolation(nodes, graph, add)
+	}
+
+	caseCollisions(nodes, tracked, add)
+	out = append(out, duplicateGroupIDs(b)...)
+
+	return sortFindings(strip(out))
 }
 
 // lintGroup runs the checks that look at one group alone: required, sizing, ears and protected.
-func lintGroup(epic int, g Group, protected []string, add func(Finding, ...string)) {
+func lintGroup(g PlanGroup, protected []string, add func(Finding, ...string)) {
 	// The fixed sizing limits.
 	const (
 		maxTaskFiles  = 5
@@ -153,52 +211,58 @@ func lintGroup(epic int, g Group, protected []string, add func(Finding, ...strin
 		maxGroupTasks = 8
 	)
 
-	tg := groupPath(epic, g.Name)
+	gp := "plan.md#" + g.Name
 
 	fail := func(r Rule, path, msg string, a ...any) {
 		add(Finding{Rule: r, Severity: SeverityFail, Path: path, Message: fmt.Sprintf(msg, a...)}, g.Name)
 	}
 	if !slices.Contains(pointScale, g.Points) {
-		fail(RuleSizing, tg, "points %d is not on the scale 1, 2, 3, 5, 8", g.Points)
+		fail(RuleSizing, gp, "points %d is not on the scale 1, 2, 3, 5, 8", g.Points)
 	}
 	if len(g.Tasks) > maxGroupTasks {
-		fail(RuleSizing, tg, "group has %d tasks; at most %d", len(g.Tasks), maxGroupTasks)
+		fail(RuleSizing, gp, "group has %d tasks; at most %d", len(g.Tasks), maxGroupTasks)
 	}
-	if len(g.Acceptance) == 0 {
-		fail(RuleRequired, tg, "group has no acceptance item")
-	}
-
-	for i, a := range g.Acceptance {
-		if msg := earsProblem(a); msg != "" {
-			fail(RuleEARS, tg, "acceptance item %d %s", i+1, msg)
-		}
+	if len(g.Files) == 0 {
+		fail(RuleRequired, gp, "files is missing or empty")
 	}
 
 	for _, f := range g.Files {
-		if protectedPath(f, protected) {
-			fail(RuleProtected, tg, "file %s is a protected path or a task list", f)
+		if matchesAny(protected, f) {
+			fail(RuleProtected, gp, "file %s is a protected path", f)
 		}
 	}
 
 	folded := map[string]string{}
 
 	for _, t := range g.Tasks {
-		tp := fmt.Sprintf("epic-%d/%s/%s.md", epic, g.Name, t.Name)
+		tp := gp + "/" + t.Name
 		if prev, ok := folded[strings.ToLower(t.Name)]; ok {
-			fail(RuleCaseCollision, tp, "task file %s.md differs only by case from %s.md", t.Name, prev)
+			fail(RuleCaseCollision, tp, "task %s differs only by case from %s", t.Name, prev)
 		}
 
 		folded[strings.ToLower(t.Name)] = t.Name
+		if len(t.Files) == 0 {
+			fail(RuleRequired, tp, "files is missing or empty")
+		}
 		if len(t.Files) > maxTaskFiles {
 			fail(RuleSizing, tp, "task names %d files; at most %d", len(t.Files), maxTaskFiles)
 		}
 		if t.EstimateLines > maxTaskLines {
 			fail(RuleSizing, tp, "task estimates %d lines; at most %d", t.EstimateLines, maxTaskLines)
 		}
+		if t.DoneWhen == "" && len(t.Acceptance) == 0 {
+			fail(RuleRequired, tp, "task has neither a done_when nor an acceptance criterion")
+		}
 
 		for _, f := range t.Files {
 			if !slices.Contains(g.Files, f) {
 				fail(RuleRequired, tp, "file %s is not in the files of %s", f, g.Name)
+			}
+		}
+
+		for i, a := range t.Acceptance {
+			if msg := earsProblem(a); msg != "" {
+				fail(RuleEARS, tp, "acceptance item %d %s", i+1, msg)
 			}
 		}
 	}
@@ -219,20 +283,13 @@ func earsProblem(a Acceptance) string {
 		"or WHILE <state> THE SYSTEM SHALL <response>"
 }
 
-// protectedPath reports whether a file is under docs/backlog or matches a protected pattern.
-func protectedPath(f string, protected []string) bool {
-	return f == backlogDir || strings.HasPrefix(f, backlogDir+"/") || matchesAny(protected, f)
-}
-
 // waveIsolation fails two groups of one wave that list the same file.
-func waveIsolation(epics []Epic, graph Graph, add func(Finding, ...string)) {
+func waveIsolation(nodes []node, graph Graph, add func(Finding, ...string)) {
 	paths := map[string]string{}
 	files := map[string][]string{}
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			paths[g.Name] = groupPath(e.Number, g.Name)
-			files[g.Name] = g.Files
-		}
+	for _, n := range nodes {
+		paths[n.name] = n.path
+		files[n.name] = n.files
 	}
 
 	for _, wave := range graph.Waves() {
@@ -263,7 +320,7 @@ func waveIsolation(epics []Epic, graph Graph, add func(Finding, ...string)) {
 }
 
 // caseCollisions fails paths that differ only by case when at least one comes from a group's files.
-func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)) {
+func caseCollisions(nodes []node, tracked []string, add func(Finding, ...string)) {
 	type owner struct{ path, group string }
 
 	byFold := map[string][]owner{}
@@ -284,13 +341,11 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 	var order []string
 
 	paths := map[string]string{}
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			paths[g.Name] = groupPath(e.Number, g.Name)
-			order = append(order, g.Name)
-			for _, f := range g.Files {
-				note(f, g.Name)
-			}
+	for _, n := range nodes {
+		paths[n.name] = n.path
+		order = append(order, n.name)
+		for _, f := range n.files {
+			note(f, n.name)
 		}
 	}
 
@@ -328,57 +383,6 @@ func caseCollisions(epics []Epic, tracked []string, add func(Finding, ...string)
 	}
 }
 
-// mergeEpics overlays the draft's groups on the stored epics; a draft group replaces a stored group of the same name.
-func mergeEpics(existing, draft []Epic) []Epic {
-	byNum := map[int]*Epic{}
-
-	var nums []int
-
-	for _, src := range [][]Epic{existing, draft} {
-		for _, e := range src {
-			cur := byNum[e.Number]
-			if cur == nil {
-				cur = &Epic{Number: e.Number}
-				byNum[e.Number] = cur
-				nums = append(nums, e.Number)
-			}
-
-			for _, g := range e.Groups {
-				if i := slices.IndexFunc(
-					cur.Groups,
-					func(x Group) bool { return x.Name == g.Name },
-				); i >= 0 {
-					cur.Groups[i] = g
-				} else {
-					cur.Groups = append(cur.Groups, g)
-				}
-			}
-		}
-	}
-
-	slices.Sort(nums)
-
-	out := make([]Epic, 0, len(nums))
-	for _, n := range nums {
-		e := byNum[n]
-		sort.SliceStable(e.Groups, func(i, j int) bool {
-			return groupIndex(e.Groups[i].Name) < groupIndex(e.Groups[j].Name)
-		})
-		out = append(out, *e)
-	}
-
-	return out
-}
-
-// groupIndex returns M of a group name tg-N.M, or 0.
-func groupIndex(name string) int {
-	var n, m int
-	if _, err := fmt.Sscanf(name, "tg-%d.%d", &n, &m); err != nil {
-		return 0
-	}
-	return m
-}
-
 // sortFindings orders findings by path and then rule, keeping the order of equal ones.
 func sortFindings(f []Finding) []Finding {
 	sort.SliceStable(f, func(i, j int) bool {
@@ -390,45 +394,67 @@ func sortFindings(f []Finding) []Finding {
 	return f
 }
 
-// numberFindings fails a draft group that is new but does not take the next number of its epic, and a draft group whose
-// status is not todo.
-func numberFindings(existing, draft []Epic) []Finding {
+// numberFindings fails a draft group that is new but does not take the next number after the groups of existing.
+func numberFindings(existing, draft Blueprint) []Finding {
 	var found []Finding
 
-	for _, e := range draft {
-		next := 1
-		have := map[string]bool{}
-		for _, se := range existing {
-			if se.Number != e.Number {
-				continue
-			}
-			for _, g := range se.Groups {
-				have[g.Name] = true
-				next = max(next, groupIndex(g.Name)+1)
-			}
+	have := map[string]bool{}
+	next := 1
+
+	for _, g := range existing.Groups {
+		have[g.Name] = true
+		next = max(next, groupNumber(g.Name)+1)
+	}
+
+	for _, g := range draft.Groups {
+		if have[g.Name] {
+			continue
 		}
 
-		for _, g := range e.Groups {
-			if g.Status != "todo" {
-				found = append(found, grammar(
-					groupPath(e.Number, g.Name),
-					fmt.Sprintf("status %q: a plan writes status todo", g.Status),
-				))
-			}
-			if have[g.Name] {
-				continue
-			}
-
-			want := fmt.Sprintf("tg-%d.%d", e.Number, next)
-			if g.Name != want {
-				found = append(found, grammar(
-					groupPath(e.Number, g.Name),
-					fmt.Sprintf("new group must be %s, the next number of epic-%d", want, e.Number),
-				))
-			}
-
-			next++
+		want := fmt.Sprintf("tg-%d", next)
+		if g.Name != want {
+			found = append(found, grammar(
+				"plan.md#"+g.Name,
+				fmt.Sprintf("new group must be %s, the next number of the plan", want),
+			))
 		}
+
+		next++
+	}
+
+	return found
+}
+
+// groupNumber returns N of a group label tg-N, or 0.
+func groupNumber(name string) int {
+	var n int
+	if _, err := fmt.Sscanf(name, "tg-%d", &n); err != nil {
+		return 0
+	}
+
+	return n
+}
+
+// duplicateGroupIDs reports each group whose id repeats an earlier group's id; the finding names both groups.
+func duplicateGroupIDs(b Blueprint) []scoped {
+	var found []scoped
+
+	first := map[string]string{}
+
+	for _, g := range b.Groups {
+		if g.ID == "" {
+			continue
+		}
+
+		if prev, ok := first[g.ID]; ok {
+			found = append(found, scoped{
+				grammar("plan.md#"+g.Name, fmt.Sprintf("id %s is already the id of %s", g.ID, prev)),
+				[]string{g.Name, prev},
+			})
+			continue
+		}
+
+		first[g.ID] = g.Name
 	}
 
 	return found

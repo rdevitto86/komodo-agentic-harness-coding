@@ -84,9 +84,9 @@ func (h *Handler) LintBacklog(d PlanDraft) []Finding {
 	cur := h.current
 	h.stateMu.Unlock()
 	if cur == nil {
-		return LintDraft(d, nil, h.protected(), nil)
+		return lintDraftBacklog(d, nil, h.protected(), nil)
 	}
-	return LintDraft(d, cur.existing, h.protected(), cur.tracked)
+	return lintDraftBacklog(d, cur.existing, h.protected(), cur.tracked)
 }
 
 // Plan runs the planner session, lints its draft and writes files only when lint passes.
@@ -218,7 +218,7 @@ func (h *Handler) lintLoop(
 		}
 
 		found := append(
-			LintDraft(draft, pl.existing, protected, pl.tracked),
+			lintDraftBacklog(draft, pl.existing, protected, pl.tracked),
 			epicNumberFindings(draft, pl.existing, r.Epic)...,
 		)
 

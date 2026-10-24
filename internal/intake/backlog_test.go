@@ -137,7 +137,7 @@ func TestGrammarFindingsNameTheFile(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			files := goodGroup(1, 1, tgSpec{})
 			files[0].Content = c.mutate(files[0].Content)
-			fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
+			fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
 			if len(fs) == 0 {
 				t.Fatal("no grammar finding")
 			}
@@ -150,7 +150,7 @@ func TestGrammarFindingsNameTheFile(t *testing.T) {
 
 func TestMissingDependenciesKeyIsRequired(t *testing.T) {
 	files := goodGroup(1, 1, tgSpec{noDeps: true})
-	fs := LintDraft(draftOf(files), nil, nil, nil)
+	fs := lintDraftBacklog(draftOf(files), nil, nil, nil)
 	if got := rulesOf(fs, RuleRequired, SeverityFail); len(got) != 1 || !strings.Contains(got[0].Message, "dependencies") {
 		t.Fatalf("findings: %+v", fs)
 	}
@@ -166,7 +166,7 @@ func TestTaskGrammar(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			files := goodGroup(1, 1, tgSpec{})
 			files[1].Content = content
-			fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
+			fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
 			if len(fs) == 0 || fs[0].Path != "epic-1/tg-1.1/tsk-one.md" {
 				t.Fatalf("findings: %+v", fs)
 			}
@@ -185,7 +185,7 @@ func TestDraftPathsAreChecked(t *testing.T) {
 	} {
 		files := goodGroup(1, 1, tgSpec{})
 		files = append(files, DraftFile{Path: p, Content: "files: a\n"})
-		fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
+		fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
 		found := false
 		for _, f := range fs {
 			if f.Path == p {
@@ -200,14 +200,14 @@ func TestDraftPathsAreChecked(t *testing.T) {
 
 func TestDraftWithoutGroupFileOrGroupFails(t *testing.T) {
 	d := PlanDraft{Files: []DraftFile{{Path: "epic-1/tg-1.1/tsk-one.md", Content: taskText(1, "x", "a")}}}
-	if len(rulesOf(LintDraft(d, nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
+	if len(rulesOf(lintDraftBacklog(d, nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
 		t.Fatal("a task file with no TG.md must fail")
 	}
-	if len(fails(LintDraft(PlanDraft{}, nil, nil, nil))) == 0 {
+	if len(fails(lintDraftBacklog(PlanDraft{}, nil, nil, nil))) == 0 {
 		t.Fatal("an empty draft must fail")
 	}
 	files := goodGroup(1, 1, tgSpec{})
-	if len(rulesOf(LintDraft(draftOf(files[:1]), nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
+	if len(rulesOf(lintDraftBacklog(draftOf(files[:1]), nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
 		t.Fatal("a group with no task file must fail")
 	}
 }
@@ -215,7 +215,7 @@ func TestDraftWithoutGroupFileOrGroupFails(t *testing.T) {
 func TestDuplicateDraftPathFails(t *testing.T) {
 	files := goodGroup(1, 1, tgSpec{})
 	files = append(files, files[0])
-	if len(rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
+	if len(rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)) == 0 {
 		t.Fatal("a repeated path must fail")
 	}
 }

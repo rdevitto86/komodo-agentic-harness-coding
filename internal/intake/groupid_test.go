@@ -23,14 +23,14 @@ func idLine(t *testing.T, r *rig, rel string) string {
 
 func TestDraftWithoutIDsPassesLint(t *testing.T) {
 	d := draftOf(goodGroup(1, 1, tgSpec{noID: true}))
-	if fs := fails(LintDraft(d, nil, nil, nil)); len(fs) != 0 {
+	if fs := fails(lintDraftBacklog(d, nil, nil, nil)); len(fs) != 0 {
 		t.Fatalf("findings: %+v", fs)
 	}
 }
 
 func TestDraftIDThatIsNotVersion7StillFails(t *testing.T) {
 	d := draftOf(goodGroup(1, 1, tgSpec{id: "0192e4c5-..."}))
-	if fs := rulesOf(LintDraft(d, nil, nil, nil), RuleGrammar, SeverityFail); len(fs) != 1 {
+	if fs := rulesOf(lintDraftBacklog(d, nil, nil, nil), RuleGrammar, SeverityFail); len(fs) != 1 {
 		t.Fatalf("findings: %+v", fs)
 	}
 }

@@ -56,10 +56,10 @@ func (h *Handler) write(d PlanDraft, pl *planState, reqEpic int) (PlanResult, er
 
 	res := PlanResult{Epic: ep.Number, Written: written, Hashes: map[string]string{}}
 	merged := mergeEpics(pl.existing, epics)
-	graph, _ := BuildGraph(merged, pl.tracked)
+	graph, _ := buildGraphEpics(merged, pl.tracked)
 
 	for _, g := range ep.Groups {
-		hash, err := CardHash(h.d.Root, g)
+		hash, err := cardHashDir(h.d.Root, g)
 		if err != nil {
 			return PlanResult{}, writeError{fmt.Errorf("hash group %s: %w", g.Name, err)}
 		}

@@ -184,7 +184,7 @@ func TestPlanWritesAPassingDraft(t *testing.T) {
 		t.Fatalf("reload: %+v %+v", epics, fs)
 	}
 	for _, g := range epics[0].Groups {
-		want, _ := CardHash(r.root, g)
+		want, _ := cardHashDir(r.root, g)
 		if res.Hashes[g.Name] != want || want == "" {
 			t.Fatalf("hash of %s: %q want %q", g.Name, res.Hashes[g.Name], want)
 		}
@@ -447,7 +447,7 @@ func TestSessionErrorFailsThePlan(t *testing.T) {
 	}
 }
 
-func TestPlanLintToolMatchesLintDraft(t *testing.T) {
+func TestPlanLintToolMatcheslintDraftBacklog(t *testing.T) {
 	var fromTool []Finding
 	var r *rig
 	probe := func(context.Context) (PlanDraft, error) {
@@ -458,7 +458,7 @@ func TestPlanLintToolMatchesLintDraft(t *testing.T) {
 	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
 		t.Fatal(err)
 	}
-	want := LintDraft(badDraft(), nil, []string{".github/**"}, []string{"README.md", "docs/hld.md"})
+	want := lintDraftBacklog(badDraft(), nil, []string{".github/**"}, []string{"README.md", "docs/hld.md"})
 	if len(want) == 0 || fmt.Sprint(fromTool) != fmt.Sprint(want) {
 		t.Fatalf("tool %+v\nwant %+v", fromTool, want)
 	}

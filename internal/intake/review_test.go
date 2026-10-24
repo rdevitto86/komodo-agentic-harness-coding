@@ -12,7 +12,7 @@ import (
 func TestAmendmentClosingACycleThroughAStoredGroupFails(t *testing.T) {
 	_, epics := stored(t, goodGroup(1, 1, tgSpec{deps: []string{"tg-1.2"}}), goodGroup(1, 2, tgSpec{}))
 	draft := draftOf(goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
-	fs := rulesOf(LintDraft(draft, epics, nil, nil), RuleGraph, SeverityFail)
+	fs := rulesOf(lintDraftBacklog(draft, epics, nil, nil), RuleGraph, SeverityFail)
 	if len(fs) != 1 || !strings.Contains(fs[0].Message, "cycle") {
 		t.Fatalf("findings: %+v", fs)
 	}
@@ -23,7 +23,7 @@ func TestOverlapWithAStoredLaterGroupFails(t *testing.T) {
 		goodGroup(1, 1, tgSpec{touches: "y/**", files: []string{"y/a.go"}}),
 		goodGroup(1, 2, tgSpec{touches: "x/**", files: []string{"x/b.go"}}))
 	draft := draftOf(goodGroup(1, 1, tgSpec{touches: "x/**", files: []string{"x/a.go"}}))
-	fs := rulesOf(LintDraft(draft, epics, nil, nil), RuleGraph, SeverityFail)
+	fs := rulesOf(lintDraftBacklog(draft, epics, nil, nil), RuleGraph, SeverityFail)
 	if len(fs) != 1 || !strings.Contains(fs[0].Message, "x/a.go") {
 		t.Fatalf("findings: %+v", fs)
 	}
@@ -68,7 +68,7 @@ func TestFailedUndoKeepsTheOldFolderForRestore(t *testing.T) {
 func TestTaskFilesDifferingOnlyByCaseFail(t *testing.T) {
 	files := goodGroup(1, 1, tgSpec{})
 	files = append(files, DraftFile{Path: "epic-1/tg-1.1/tsk-ONE.md", Content: files[1].Content})
-	fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleCaseCollision, SeverityFail)
+	fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleCaseCollision, SeverityFail)
 	if len(fs) != 1 || !strings.Contains(fs[0].Message, "tsk-ONE.md") {
 		t.Fatalf("findings: %+v", fs)
 	}
@@ -77,7 +77,7 @@ func TestTaskFilesDifferingOnlyByCaseFail(t *testing.T) {
 func TestLeadingZerosInPathNumbersFail(t *testing.T) {
 	for _, p := range []string{"epic-01/tg-1.1/TG.md", "epic-1/tg-01.1/TG.md", "epic-1/tg-1.01/TG.md"} {
 		files := []DraftFile{{Path: p, Content: "files: a\n"}}
-		fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
+		fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
 		if len(fs) == 0 || fs[0].Path != p {
 			t.Errorf("%s: %+v", p, fs)
 		}
@@ -109,7 +109,7 @@ func TestZeroPaddedEpicCannotBypassTheLock(t *testing.T) {
 func TestDraftGroupMayNotReuseAStoredID(t *testing.T) {
 	_, epics := stored(t, goodGroup(1, 1, tgSpec{}))
 	draft := draftOf(goodGroup(1, 2, tgSpec{id: uid(101)}))
-	fs := rulesOf(LintDraft(draft, epics, nil, nil), RuleGrammar, SeverityFail)
+	fs := rulesOf(lintDraftBacklog(draft, epics, nil, nil), RuleGrammar, SeverityFail)
 	if len(fs) != 1 || !strings.Contains(fs[0].Message, "id") {
 		t.Fatalf("findings: %+v", fs)
 	}
@@ -131,7 +131,7 @@ func TestNewGroupsTakeTheNextNumbers(t *testing.T) {
 		{"new epic first group", draftOf(goodGroup(2, 1, tgSpec{})), epics, true},
 	}
 	for _, c := range cases {
-		fs := rulesOf(LintDraft(c.draft, c.old, nil, nil), RuleGrammar, SeverityFail)
+		fs := rulesOf(lintDraftBacklog(c.draft, c.old, nil, nil), RuleGrammar, SeverityFail)
 		if c.ok != (len(fs) == 0) {
 			t.Errorf("%s: %+v", c.name, fs)
 		}
@@ -141,7 +141,7 @@ func TestNewGroupsTakeTheNextNumbers(t *testing.T) {
 func TestPlanWritesStatusTodoOnly(t *testing.T) {
 	for _, st := range []string{"done", "in_progress", "blocked"} {
 		files := goodGroup(1, 1, tgSpec{status: st})
-		fs := rulesOf(LintDraft(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
+		fs := rulesOf(lintDraftBacklog(draftOf(files), nil, nil, nil), RuleGrammar, SeverityFail)
 		if len(fs) != 1 || !strings.Contains(fs[0].Message, "todo") {
 			t.Errorf("%s: %+v", st, fs)
 		}
