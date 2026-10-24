@@ -201,13 +201,15 @@ Go package `internal/cli`, plus the program entry point.
 | `cmd/komodo/wire_engine.go` | `buildEngine`: the Runtime Manager's dependencies, the hub that routes its calls to the repository they name, the per-repository kit and the plan router |
 | `cmd/komodo/wire_tasks.go` | Builds each group's Task Manager from the group spec and the plan's blueprint, serves it over the command and reply channels, and adapts the Commit Handler to the group |
 | `cmd/komodo/wire_intake.go` | The Intake Handler's dependencies: the planner session over the model client, its tool host and the group-record lock reader |
-| `cmd/komodo/wire_adapters.go` | Small adapters: the State Manager with a context, the plan source, the clean-up wrappers and the compile-time git assertions |
+| `cmd/komodo/wire_adapters.go` | Small adapters: the State Manager with a context, the clean-up wrappers and the compile-time git assertions |
+| `cmd/komodo/wire_plans.go` | The plan source the Runtime Manager reads specs and plan facts from, and the blueprint labels and group status the Cleanup Handler reads |
 | `cmd/komodo/wire_events.go` | Binds the Commit and Cleanup handlers' progress facts to run-status event types |
 | `internal/integration/phase5_test.go`, `phase6_test.go`, `multirepo_test.go` | The phase 5 and phase 6 exits and the two-repository run, driven through the built binary ([21.1](#211-end-to-end-verification-plan)) |
 | `internal/cli/cli.go` | The types (`Envelope`, `Result`, `Command`, `Call`, `Deps`), `New`, `Run`, `validate`, `resolve`, `render`, `PrintError` and the exit codes |
 | `internal/cli/parse.go` | `parse`: splitting the command words, the flag sets, `--input`, the closest-name match |
 | `internal/cli/table.go` | The command table and the checks of each command's arguments |
-| `internal/cli/repo.go` | The pin check, the repository id and root, and the resolution of a plan id and group label from the plan's blueprint |
+| `internal/cli/repo.go` | The pin check, the repository id and root |
+| `internal/cli/plans.go` | The resolution of a plan id and group label from the plan's blueprint, and the plan list |
 | `internal/cli/help.go` | `--help` text and `--help --json`, built when the command runs from the table and the field tags of each data struct |
 | `internal/cli/work.go` | `plan`, `run`, `stop`, `replay`, `abandon`: each builds one event or one control request |
 | `internal/cli/engine.go`, `engine_unix.go`, `engine_windows.go` | The control socket client: dial, start the engine on demand, send a request, read the replies; starting the engine detached differs per platform |
@@ -1539,7 +1541,10 @@ type StopFacts struct {
 
 // PlanFacts feeds reply.plan.
 type PlanFacts struct {
-	Goal string `json:"goal"`
+	Goal  string `json:"goal"`
+	Plan  string `json:"plan"`  // the plan id the planner wrote
+	Path  string `json:"path"`  // the absolute path of plan.md
+	Start string `json:"start"` // the command that starts the plan
 }
 
 // ConfigRow is one setting as config get prints it.
@@ -1588,7 +1593,9 @@ type ScheduleFacts struct {
 // AnswerFacts feeds reply.answer.
 type AnswerFacts struct {
 	Group  string `json:"group"`
-	Answer string `json:"answer"` // approve or deny
+	Answer string `json:"answer"` // approve, deny or override
+	// labels of the high or critical groups the approval landed
+	Risky []string `json:"risky"`
 }
 
 // AbandonFacts feeds reply.abandon.
@@ -1754,7 +1761,7 @@ The block reasons are the `Reason` values of [10.3](#103-data-model) that end a 
 
 // blockReasons lists the reasons a group is blocked; each is the code of a needs.<reason> shape.
 var blockReasons = []string{
-	"no_provider", "pause_timeout", "paid_refused", "flap", "retries", "needs_scope", "context",
+	"no_provider", "pause_timeout", "paid_refused", "flap", "retries", "needs_scope", "risky_change", "context",
 	"setup", "publish", "merge_conflict", "cleanup", "wall", "dependency", "crash", "contract",
 	"state_invalid",
 }
@@ -2815,8 +2822,9 @@ type RunStop struct {
 type RunContinue struct {
 	Target string   `json:"target"`           // a plan id or a run id
 	Groups []string `json:"groups"`           // empty: every blocked group of the plan; one label: that group only
-	Answer string   `json:"answer,omitempty"` // "approve" or "deny" from --approve or --deny; empty for a plain continue
-	Request ID    `json:"request,omitempty"` // the control socket Request.ID of the command
+	Answer  string   `json:"answer,omitempty"`  // "approve", "deny" or "override"; empty for a plain continue
+	Minutes int      `json:"minutes,omitempty"` // override only: the final try's working time in minutes
+	Request ID       `json:"request,omitempty"` // the control socket Request.ID of the command
 }
 ```
 
@@ -2989,7 +2997,7 @@ func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} 
 
 // GroupDone is the data of run-status / group.done: how a group ended.
 type GroupDone struct {
-	Outcome string `json:"outcome"` // complete, abandoned, dropped or lost
+	Outcome string `json:"outcome"` // complete, abandoned, dropped, failed or lost
 }
 
 // EventKey binds GroupDone to run-status / group.done.
@@ -3402,6 +3410,8 @@ type RequestRef struct {
 // RequestAccepted is the data of run-status / request.accepted.
 type RequestAccepted struct {
 	RequestRef
+	// labels of the high or critical groups a bulk approval landed
+	Risky []string `json:"risky,omitempty"`
 }
 
 // RequestRefused is the data of run-status / request.refused.
@@ -3833,8 +3843,10 @@ The package is `internal/intake`.
 | File | Holds |
 |---|---|
 | `internal/intake/intake.go` | `Handler`: the `plan` subscription, the `plan` / `written` publication and the plan state |
-| `internal/intake/planfile.go` | Grammar: parse and write `plan.md` |
-| `internal/intake/blueprint.go` | The blueprint: encode, decode and read from the plan folder |
+| `internal/intake/planfile.go` | Grammar: `Parse` and `Render` of `plan.md` |
+| `internal/intake/blueprint.go` | The blueprint types, `PlanDir`, `LoadBlueprint`, `WriteBlueprint` and `NewPlanID` |
+| `internal/intake/amend.go` | The change of a stored plan: the shape change and the group rewrite of a `plan` request that names a plan |
+| `internal/intake/repofolder.go` | `RepoFolder`: the name of a repository's folder under the plans folder |
 | `internal/intake/lint.go` | The eight lint checks, sizing and the EARS shape |
 | `internal/intake/graph.go` | Dependency graph, cycle refusal, waves, longest chain |
 | `internal/intake/plan.go` | `Plan`: the planner session, lint returns and the all-or-nothing write |
@@ -4171,7 +4183,16 @@ The handler ends planning by publishing `plan` / `written` for the plan it just 
 
 A group label is the group's heading in `plan.md`, such as `tg-1`. The `run-start` shape is in [chapter 4](#4-event-bus).
 
-The package registers `plan` / `request`, `plan` / `written` and the five plan error subtypes with `RegisterEvents()`. The `error` data structs:
+The package registers `plan` / `request`, `plan` / `written` and the five plan error subtypes with `RegisterEvents()`. The `plan` / `written` data struct and the `error` data structs:
+
+```go
+// PlanWritten is the data of plan / written: the plan folder exists and planning has ended.
+type PlanWritten struct {
+	Plan   string   `json:"plan"`   // the plan id
+	Path   string   `json:"path"`   // absolute path of plan.md
+	Groups []string `json:"groups"` // labels of the groups in the plan, in dependency order
+}
+```
 
 ```go
 // PlanBlocked is the data of error / plan-blocked.
@@ -4261,6 +4282,8 @@ type Publisher interface {
 // LockReader answers whether a group is in a run; the State Manager backs it.
 type LockReader interface {
 	InRun(groupID string) (run string, locked bool, err error)
+	// Finished returns the names of the group's finished tasks; a group with no saved state has none.
+	Finished(groupID string) ([]string, error)
 }
 
 // PlannerLimits are the planner's clocks from the Agent Registry.
@@ -4283,11 +4306,27 @@ type PlannerLimits struct {
 // LoadBlueprint reads blueprint.json from the plan folder of a plan id; the engine calls it at run start and after a restart.
 func LoadBlueprint(home, repo, plan string) (Blueprint, error)
 
-// Approve reads plan.md, runs Lint on it, rewrites blueprint.json from it and returns the blueprint; a failing finding refuses the run.
-func Approve(home, repo, plan string, protected, tracked []string) (Blueprint, []Finding, error)
+// WriteBlueprint writes blueprint.json into the plan folder of the blueprint, replacing any earlier file whole.
+func WriteBlueprint(home string, b Blueprint) error
+
+// PlanDir returns the plan folder of a plan id: <home>/plans/<repo>/<plan>.
+func PlanDir(home, repo, plan string) string
+
+// NewPlanID returns plan- and 6 random lowercase hexadecimal characters, drawn again while exists reports the id taken.
+func NewPlanID(exists func(id string) bool) (string, error)
+
+// RepoFolder returns the name of a repository's folder under the plans folder: every "/" of the repository id becomes "-"
+// and a leading "-" is dropped, so github.com/acme/shop is github.com-acme-shop.
+func RepoFolder(repoID string) string
 
 // Parse reads the text of plan.md; grammar problems come back as findings, not errors.
 func Parse(text string) (Blueprint, []Finding)
+
+// Render writes a blueprint as the text of plan.md.
+func Render(b Blueprint) string
+
+// Approve reads plan.md, runs Lint on it, rewrites blueprint.json from it and returns the blueprint; a failing finding refuses the run.
+func Approve(home, repo, plan string, protected, tracked []string) (Blueprint, []Finding, error)
 
 // Lint runs the eight checks on a parsed plan and returns their findings.
 func Lint(b Blueprint, protected, tracked []string) []Finding
@@ -4306,6 +4345,7 @@ func CardHash(planText string, g Group) (string, error)
 |---|---|
 | `LoadBlueprint` | A missing or unreadable `blueprint.json` is `err` |
 | `Approve` | A file the program cannot read is `err`; a lint problem is a finding, and any `fail` finding refuses the run |
+| `WriteBlueprint`, `NewPlanID` | A repository or plan name that is empty or holds a path separator, or every id drawn taken (`ErrPlanIDTaken`), is `err` |
 | `Parse` | A missing or unknown field is a `grammar` finding naming the place |
 | `Lint`, `LintDraft` | Cannot fail; a problem in the plan is a finding |
 | `CardHash` | A group with no section in the text is `err` |
@@ -6180,7 +6220,15 @@ type Janitor interface {
 
 // PlanSource is the Intake Handler's blueprints as the Runtime Manager reads them.
 type PlanSource interface {
-	Specs(ctx context.Context, repo, plan string, labels []string) ([]GroupSpec, error) // the specs of the plan's groups a run-start names, read from the plan's blueprint; empty labels name every group
+	Specs(ctx context.Context, root, plan string, labels []string) ([]GroupSpec, error) // the specs of the plan's groups a run-start names, read from the plan's blueprint; empty labels name every group; root is the repository root the run names
+	Facts(ctx context.Context, root, plan string) (PlanFacts, error)                   // what the plan's pull request describes: the goal, the release and every group of the plan
+}
+
+// PlanFacts is what a plan's pull request says about the plan, whatever groups the current run holds.
+type PlanFacts struct {
+	Goal       string   // the plan's goal
+	Release    string   // the release the plan delivers, such as V1
+	GroupGoals []string // one line per group of the plan, as "<label>: <goal>"
 }
 
 // EpicGit is the part of the git wrapper the Runtime Manager uses to find or create an epic's branch; it follows the wrapper rules of 15.4.
@@ -8096,7 +8144,7 @@ type GroupState struct {
 	Stage       Stage         `json:"stage"`        // current stage
 	Prior       Stage         `json:"prior"`        // the working stage a paused or blocked group left
 	Epoch       uint32        `json:"epoch"`        // rises each time the group enters a stage; an input from an older epoch is stale
-	Outcome     string        `json:"outcome"`      // set in done: complete, lost, abandoned or dropped
+	Outcome     string        `json:"outcome"`      // set in done: complete, lost, abandoned, dropped or failed
 	Fence       uint64        `json:"fence"`        // the Lease Manager's fence for this holder; never zero
 	ConfigHash  string        `json:"config_hash"`  // SHA-256 of the settings pinned at run start
 	Version     string        `json:"version"`      // Komodo version that started the group
@@ -8211,6 +8259,7 @@ const (
 	ReasonFlap          Reason = "flap"           // the same failure, or a return that changed nothing
 	ReasonRetries       Reason = "retries"        // the group's retries are spent; a person may override until the window lapses
 	ReasonNeedsScope    Reason = "needs_scope"    // the builder needs a file outside its group's files
+	ReasonRiskyChange   Reason = "risky_change"   // the group passed its checks at risk level high or critical and waits for a person to land it
 	ReasonContext       Reason = "context"        // the brief exceeds half the context of every link
 	ReasonSetup         Reason = "setup"          // the group could not start: lease, worktree or sandbox
 	ReasonPublish       Reason = "publish"        // push or pull request failed
@@ -8931,6 +8980,14 @@ type TaskSpec struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	DoneWhen string `json:"done_when"` // command class the builder's task_done reruns
+	// acceptance criteria; with no DoneWhen, task_done runs each criterion's Cmd
+	Criteria []Criterion `json:"criteria,omitempty"`
+}
+
+// Criterion is one acceptance criterion of a task.
+type Criterion struct {
+	Text string `json:"text"`
+	Cmd  string `json:"cmd,omitempty"` // empty leaves the criterion to Quality Assurance
 }
 
 // LeaseRef is the lease's record for one group.
@@ -9856,7 +9913,7 @@ type Wake struct {
 | Method | Error | Meaning and what the caller does |
 |---|---|---|
 | `New` | A spec with no worktree | A programming error; the Runtime Manager does not start the group |
-| `Run` | `ErrHeld` | An escalation is open; the loop sends `ended` with result `held`, and the Runtime Manager waits and sends `continue` |
+| `Run` | `ErrHeld` | An escalation is open, or the group passed its checks at risk level `high` or `critical` and waits for a person to land it; the loop sends `ended` with result `held`, and the Runtime Manager waits and sends `continue` |
 | `Run` | `ErrGroupPaused` | The group waits on a provider limit; the loop sends `ended` with result `paused`, and the Runtime Manager sleeps and sends `continue` with a wake-up |
 | `Run` | Any other error | The group failed; the loop sends `ended` with result `failed`, and the Runtime Manager passes it to the Error Handler |
 | `Continue` | `ErrNoEscalation` | The answer names no open escalation, or a second answer arrived; it is dropped and logged |
@@ -13338,9 +13395,12 @@ const bodyTemplate = `## Summary
 type EpicFacts struct {
 	Goal       string   `json:"goal"`        // the plan's goal
 	GroupGoals []string `json:"group_goals"` // one line per group of the plan, as "<label>: <goal>"
-	DiffStat   string   `json:"diff_stat"`   // git's diff stat of the feature branch against the base branch
-	Groups     []string `json:"groups"`      // one section per landed group, in landing order, as RenderBody wrote it
-	Changelog  string   `json:"changelog"`   // the link to the plan's changelog fragment
+	Release    string   `json:"release"`     // the release the plan delivers
+	Changelog  string   `json:"changelog"`   // path of the plan's changelog fragment
+	// git's diff stat of the epic branch against the base branch
+	DiffStat string `json:"diff_stat"`
+	// one section per landed group, in landing order, as RenderBody wrote it
+	Groups []string `json:"groups"`
 }
 
 // epicBodyTemplate is the plan's pull request body; every value comes from EpicFacts.
@@ -13378,7 +13438,10 @@ type EpicPush struct {
 	Epic       string   `json:"epic"`        // the epic label, such as plan-7f3a9c
 	EpicGroups []string `json:"epic_groups"` // labels of every group of the epic
 	// labels of the groups the Runtime Manager holds Done; the pull request opens only when this names every group
-	Done []string `json:"done"`
+	Done       []string `json:"done"`
+	Goal       string   `json:"goal"`        // the plan's goal
+	GroupGoals []string `json:"group_goals"` // one line per group, as "<label>: <goal>"
+	Release    string   `json:"release"`     // the release the plan delivers, such as V1
 }
 
 // EpicResult is what PushEpic returns: what the epic branch holds locally and what reached the remote.
@@ -13626,7 +13689,7 @@ type Landing struct {
 
 | Method | Error means | Caller does |
 |---|---|---|
-| `Commit` with `ErrCriticalRef` | The checked-out branch is not under `komodo/` | Never retried; `Publish` fails with kind `critical_ref` |
+| `Commit` with `ErrCriticalRef` | The checked-out branch is not under `komodo/`; a detached HEAD is accepted by `Commit` and `Merge` | Never retried; `Publish` fails with kind `critical_ref` |
 | `Push` with `ErrPushRejected` | The remote refused, for example it holds commits the branch lacks | No force is tried; kind `push_rejected`, not retryable |
 | `Push`, other error | Network or authentication failure | Kind `push`, retryable |
 | `Merge` with `ErrConflict` | The merge conflicts | Kind `merge_conflict`, not retryable |
@@ -13946,6 +14009,7 @@ The Go package is `internal/cleanup` (phase 6 of the build order in HLD Appendix
 | `internal/cleanup/versions.go` | `UnusedVersions`: installed binary versions no unfinished group names |
 | `internal/cleanup/steps.go` | The removal steps that `Complete`, `Sweep` and `Discard` share: container, checkouts, worktree, branch |
 | `internal/cleanup/paths.go` | The check that every deleted path lies inside one of the handler's folders |
+| `internal/cleanup/plans.go` | `Blueprints`, `PlanGroups` and `GroupStatus`; the removal of plan folders by `Complete` and `Sweep` |
 
 **Entry points**
 
@@ -13976,6 +14040,8 @@ type Published struct {
 	// holds the group's work. The remote is not consulted and Into names the local epic branch that must hold that change.
 	Landed string `json:"landed,omitempty"`
 	Into   string `json:"into,omitempty"`
+	Plan   string `json:"plan,omitempty"`  // id of the plan the group belongs to; empty keeps every plan folder
+	Label  string `json:"label,omitempty"` // the group's label inside the plan, such as tg-2; it counts as closed
 }
 
 // PublishedEpic says that an epic's branch and pull request are on the remote, so its landing worktree and branch may go.
@@ -14035,6 +14101,7 @@ type Roots struct {
 	QA   string // one Quality Assurance checkout per group; empty means none exist
 	Temp      string // one session temporary folder per group; empty means none exist
 	Versions  string // one folder per installed binary version
+	Plans     string // one folder per plan of the repository, such as ~/.komodo/plans/<repo-id>; empty means none
 }
 ```
 
@@ -14065,6 +14132,7 @@ type Handler struct {
 	Groups Groups     // reads group records from the State Manager
 	Report Reporter   // relays a progress fact to the Runtime Manager
 	Errors Errors     // the Error Handler; receives each removal failure
+	Plans  Blueprints // reads a plan's group labels; nil keeps every plan folder
 
 	Repo   string                 // repo id the lease registry files the groups under
 	Clone  string                 // path of the clone every git call runs in
@@ -14072,6 +14140,7 @@ type Handler struct {
 	Current string                // version of the running binary; UnusedVersions always keeps it
 	Roots  Roots                  // the only folders the handler deletes in
 	Live   func(lease.Lease) bool // true while a working run holds the lease; nil counts every held lease as live
+	Now    func() time.Time       // the clock that ages plan folders; nil uses time.Now
 }
 
 // Complete cleans up one published group, then closes it; the Commit Handler calls it after the group's landing.
@@ -14157,11 +14226,32 @@ type Groups interface {
 	Unfinished(ctx context.Context) ([]GroupRef, error)
 }
 
-// GroupRef names an unfinished group and the binary version its run pinned.
+// GroupRef names an unfinished group, the binary version its run pinned and the epic it lands on.
 type GroupRef struct {
 	Group   string
 	Version string
-	Epic    string // the epic the group lands on, from its GroupSpec
+	Epic    string // epic folder name; empty when unknown, which keeps every landing
+}
+
+// Blueprints reads a plan's blueprint; the Intake Handler's LoadBlueprint backs it.
+type Blueprints interface {
+	// Labels returns the group labels of a plan, such as tg-1 and tg-2; a missing blueprint wraps os.ErrNotExist.
+	Labels(ctx context.Context, plan string) ([]string, error)
+}
+
+// GroupStatus is the state of one group of a plan.
+type GroupStatus string
+
+// The statuses of a plan's group.
+const (
+	StatusNone    GroupStatus = ""        // the group has no state yet
+	StatusRunning GroupStatus = "running" // the group has state and is not closed
+	StatusClosed  GroupStatus = "closed"  // the group is done
+)
+
+// PlanGroups is implemented by a Groups that can read the status of one group of a plan.
+type PlanGroups interface {
+	PlanGroup(ctx context.Context, plan, label string) (GroupStatus, error)
 }
 
 // Reporter relays a progress fact to the Runtime Manager, which publishes it as a run-status event.
