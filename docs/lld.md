@@ -787,8 +787,8 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 
 | Command | The id is |
 |---|---|
-| `run` | A plan id alone; a group label after it names one group: with `--approve` or `--deny` it answers that group, and with a prompt it rewrites that group and runs it |
-| `plan` | Optional: an existing plan id, to amend that plan |
+| `run` | A plan id alone; a group label after it names one group: with `--approve` or `--deny` it answers that group, and with a prompt it rewrites that group's tasks and runs it |
+| `plan` | Optional: an existing plan id, to change that plan's shape |
 | `stop`, `replay`, `status` | A plan id, a plan id then a group label, or a run id. A group label alone is a usage error; after a plan id it means that group's latest attempt, and a run id means that one attempt. `status` takes none to list live runs |
 | `abandon` | A plan id and a group label |
 | `config get\|set` | A settings key |
@@ -824,7 +824,7 @@ The id is a dotted settings key such as `limits.group_retries` or `agents.review
 
 ##### `plan`
 
-Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input. `plan <plan id>` with a goal amends that plan: only groups that have not started change, and a change to a running or done group is refused.
+Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input. `plan <plan id>` with a prompt changes the plan's shape: it adds, removes or splits groups that have not started, and runs nothing; a change to a running or done group is refused. To rewrite one group's tasks, use `run <plan id> <group>` with a prompt.
 
 `plan` writes `plan.md`, prints its path and the plan id, and stops; `plan` has no auto-approval option. A person or the orchestrator may read and edit the file, then start it with `komodo run <plan id>`. A document set may include a `docs/backlog/` folder; the planner reads it like any other input document.
 
@@ -836,16 +836,16 @@ Anyone runs `run (plan id)`, usually the orchestrator. It sends the engine a `ru
 |---|---|
 | `run <plan id>` | Looks up the existing plan and finishes it: runs every group that is not done, each from its saved state. Done, blocked and running status comes from the group state, never from a file |
 | `run <id> --schedule <time>` | Queues the run for `<time>`, an RFC 3339 timestamp (an internet date-time format) such as `2026-10-16T02:00:00-07:00` |
-| `run <plan id> --approve` | Answers every blocked group of the plan by granting what it asked for, such as more files or more time |
-| `run <plan id> <group> --approve` | Grants what that one blocked group asked for |
+| `run <plan id> --approve` | Answers every blocked group of the plan by granting what it asked for, such as more files, more time or landing a `high` or `critical` group; the reply names which groups were `high` or `critical` |
+| `run <plan id> <group> --approve` | Grants what that one blocked group asked for; for a `high` or `critical` group that passed its checks, it lands the group on the feature branch |
 | `run <plan id> --deny` | Answers every blocked group of the plan by refusing what it asked for |
-| `run <plan id> <group> --deny` | Refuses what that one blocked group asked for |
-| `run <plan id> <group>` with a prompt | The planner rewrites that one group from the prompt, the lint checks run again on the plan, and the group then runs, so the changes are made [TODO: how the prompt is passed on the command line, and what the rewrite does for a group that is running or done ([G-331](#g-331))] |
+| `run <plan id> <group> --deny` | Refuses what that one blocked group asked for; for a `high` or `critical` group it drops the group |
+| `run <plan id> <group>` with a prompt | The planner rewrites that one group's tasks from the prompt, the lint checks run again on the plan, and the group then runs, so the changes are made. The prompt is quoted text at the end: `komodo run plan-7f3a9c tg-2 "use the cache instead of the database"`. A long prompt uses `--input`. A group that has not started is rewritten in place; a running group is stopped, keeps its finished tasks, has its remaining tasks rewritten and continues; a done group gets new tasks that build on its landed work, runs, and lands again on the feature branch ([7.5](#75-behaviour)) |
 
 - **Continuing.** A group that already has saved state continues from it, so `komodo run plan-7f3a9c` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run plan-7f3a9c`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
 - **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`, `start`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
 - **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. With a plan id alone, the answer reaches every blocked group of the plan; with a group label after it, only that group. The Runtime Manager passes the answer to each reached group's Task Manager over its command channel. A named group that is not blocked refuses the answer with `not_blocked`.
-- **Combinations.** `--approve` and `--deny` take a plan id, or a plan id then a group label, and cannot combine with each other or `--schedule`. A group label with neither `--approve`, `--deny` nor a prompt is a usage error.
+- **Combinations.** `--approve` and `--deny` take a plan id, or a plan id then a group label, and cannot combine with each other or `--schedule`. A group label with neither `--approve`, `--deny` nor a prompt is a usage error. The text after the group label is the prompt; unquoted words are joined into one prompt.
 
 ##### `stop`
 
@@ -1379,6 +1379,7 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Engine on demand:** with no listener on a fixture `engine.sock`, `Engine.Ensure` starts a fake engine and the request is sent once; a second command finds the first engine and starts none.
 - **Socket access:** the fixture `engine.sock` is created readable and writable by its owner only.
 - **Status wait:** a fake engine that reports one blocked group makes `status --wait` exit 3 with that group's question; a fake engine with no live run makes it exit 0 with `waited` set to `done`.
+- **Prompt words:** `run plan-7f3a9c tg-2 use the cache instead of the database` without quotes sends the same one prompt as the quoted form, `"use the cache instead of the database"`.
 - **Replay is read-only:** `replay plan-7f3a9c tg-2` against a fixture event store prints each recorded event in order, marks a torn last line as a gap, and publishes nothing.
 
 ### 1.10 Open Gaps
@@ -1390,7 +1391,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-19](#g-19) | The 50 ms short-command budget is a target until measured |
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
 | [G-121](#g-121) | Whether native Windows needs its own console check in `validate`; applies only if native Windows returns |
-| [G-331](#g-331) | How a group rewrite takes its prompt, and what it does to a running or done group |
 
 ## 2. Output Formatter
 
@@ -2988,7 +2988,7 @@ func (GroupResumed) EventKey() Key { return Key{TypeRunStatus, "group.resumed"} 
 
 // GroupDone is the data of run-status / group.done: how a group ended.
 type GroupDone struct {
-	Outcome string `json:"outcome"` // complete, abandoned, lost or quarantined
+	Outcome string `json:"outcome"` // complete, abandoned or lost
 }
 
 // EventKey binds GroupDone to run-status / group.done.
@@ -4107,7 +4107,8 @@ type Graph struct {
 type PlanRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths; a docs/backlog/ folder is one of them like any other
-	Plan string   `json:"plan"` // an existing plan id to amend as a delta; empty for a new plan
+	Plan  string  `json:"plan"`  // an existing plan id whose shape changes (groups added, removed or split before they start); empty for a new plan
+	Group string  `json:"group"` // with Plan: the one group whose tasks are rewritten from Goal, the prompt; empty for a shape change
 
 	Repo      string `json:"repo"`       // the repository id the plan belongs to
 	Root      string `json:"root"`       // the repository root on this machine
@@ -4130,7 +4131,8 @@ type PlanDraft struct {
 |---|---|
 | `goal` | A plan needs a goal, at least one document, or both |
 | `docs` | Each path must exist in the repository at the base commit; the Intake Handler reads it, the planner does not |
-| `plan` | A non-empty plan id amends only groups that are not in a run |
+| `plan` | A non-empty plan id changes the plan's shape: it adds, removes or splits groups that have not started, and runs nothing |
+| `group` | With `plan`, the one group whose tasks the prompt in `goal` rewrites; a running group is stopped and a done group gets new tasks ([7.5](#75-behaviour)) |
 
 #### Event data
 
@@ -4267,7 +4269,7 @@ type PlannerLimits struct {
 | Harness wiring | `New`, `Run` | Once at start |
 | Event Bus | the `plan` subscription | A `plan` event arrives |
 | Handler | `Context.GetContext` | Once per planner session, for the planner's brief |
-| Handler | `Locks.InRun` | Before an amended plan touches an existing group |
+| Handler | `Locks.InRun` | Before a shape change touches an existing group |
 
 #### Plan and blueprint
 
@@ -4362,7 +4364,7 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error)
 | Error | Meaning and what the caller does |
 |---|---|
 | `PlanBlockedError` | The third draft failed lint. `Run` publishes an `error` event with subtype `plan-blocked` carrying the findings |
-| `LockedError` | An amended plan touched a group that is in a run; the group is left unchanged and the plan fails naming the run. `Run` publishes `error` / `plan-locked` |
+| `LockedError` | A shape change touched a group that is in a run or done; the group is left unchanged and the plan fails naming the run. `Run` publishes `error` / `plan-locked` |
 | `context.DeadlineExceeded` | The planner's wall clock ran out; no file is written |
 
 ```go
@@ -4411,7 +4413,7 @@ After the stop, a person or the orchestrator may read and edit `plan.md`, then r
 
 1. Refuse a request with no goal and no document.
 2. Read each document in `docs` at the base commit; a missing document fails the plan before any model runs.
-3. When `plan` is non-empty, `LoadBlueprint` the plan and ask `Locks.InRun` for each group; a locked group is a read-only input and an amended plan that changes it fails with `LockedError`.
+3. When `plan` is non-empty, `LoadBlueprint` the plan. For a shape change, ask `Locks.InRun` for each group; a locked group is a read-only input and a shape change that touches a running or done group fails with `LockedError`. When `group` is also set, the planner rewrites only that group's tasks from the prompt, whatever the group's state; the Runtime Manager stops a running group and continues it, and a done group gets new tasks that run and land again ([7.5](#75-behaviour)). The lint checks run again on the plan.
 4. Call `GetContext()` and open the session.
 5. Run the lint loop below.
 6. Write the plan folder, then publish `plan` / `written` with `PlanResult`.
@@ -4493,7 +4495,7 @@ Two globs overlap when one file matches both, among the tracked files of the bas
 **Writing the files**
 
 1. The draft is staged as `.plan-<random>/` beside the plan folders of the repository, with `plan.md` and `blueprint.json` in it. A new plan folder is then renamed into place as `<plan id>` in one rename.
-2. `komodo plan` with an existing plan id amends it: the planner rewrites only groups that have not started, and a change that touches a running or done group fails with `LockedError`. An amended plan is written the same way: the old folder is renamed aside to `.plan-old-<random>`, the new one goes into place, and the old one is then removed.
+2. `komodo plan <plan id>` with a prompt changes the plan's shape: the planner adds, removes or splits only groups that have not started, and a change that touches a running or done group fails with `LockedError`. `komodo run <plan id> <group>` with a prompt rewrites that one group's tasks instead, and does not fail with `LockedError`. A changed plan is written the same way: the old folder is renamed aside to `.plan-old-<random>`, the new one goes into place, and the old one is then removed.
 3. A crash leaves the plan old or new, never half. The next plan restores an orphaned `.plan-old-*` folder.
 4. Reads of plan folders ignore every `.plan-*` folder.
 
@@ -4532,7 +4534,7 @@ A lint failure under 3 returns the draft to the same session and leaves the plan
 2. Lint is one function; the planner's tool, the plan loop and the run-start check of `plan.md` call the same eight checks.
 3. The Intake Handler publishes `plan` / `written` only after the folder is written and every card hash is computed.
 4. The planner session holds no write tool and no git or forge credential.
-5. A group in a run is never rewritten by a plan.
+5. A shape change never touches a group in a run; only a group rewrite from a prompt does.
 6. A plan handles one request at a time; a second `plan` event waits.
 
 #### Failures
@@ -4550,12 +4552,12 @@ A lint failure under 3 returns the draft to the same session and leaves the plan
 | Two groups in one wave share a file | `Lint`, rule `wave_isolation` | Counted as a failed draft |
 | Overlapping globs with no order | `BuildGraph` | Counted as a failed draft; the finding names both groups and the file |
 | A dependency cycle | `BuildGraph` | Counted as a failed draft |
-| An amended plan names a group in a run | `Locks.InRun` | `LockedError` naming the run; the group is unchanged |
+| A shape change names a group in a run | `Locks.InRun` | `LockedError` naming the run; the group is unchanged |
 | The rename of a new folder fails | Filesystem error | Plan Blocked; the old folder is restored; `error` / `plan-write` published |
 | `Locks.InRun` cannot answer | Error from the State Manager | Plan fails closed; `error` / `plan-input` published |
 | A task over twice its estimate after Build | `OverEstimate` | A warning for the next plan; nothing stops |
 
-A failed lint leaves no group started, so nothing is locked. The person fixes `plan.md`, or plans again with `plan` set to the plan id, which amends only groups that are not in a run.
+A failed lint leaves no group started, so nothing is locked. The person fixes `plan.md`, or plans again with `plan` set to the plan id, which changes the shape of only groups that are not in a run.
 
 A plan always asks the model: no earlier draft is reused. The only cached input is the repo map of one exact tree, built by Go code ([chapter 8](#8-cache-manager)).
 
@@ -4614,7 +4616,8 @@ These use a mock model client that returns scripted drafts, and a fake bus.
 - A session whose draft fails lint 3 times ends the plan Blocked and publishes `error` / `plan-blocked` with the findings.
 - A session that fails once and then passes receives the failure text once and the plan writes its files.
 - A plan whose deadline passes publishes `error` / `plan-timeout` and writes 0 files.
-- An amended plan naming a group in a run returns `LockedError` and leaves the group unchanged.
+- A shape change naming a group in a run or done returns `LockedError` and leaves the group unchanged.
+- A group rewrite from a prompt on a group in a run does not return `LockedError`.
 - A killed process between the two renames leaves the plan old or new, and the next plan restores `.plan-old-*`.
 - A passing plan publishes one `plan` / `written` event; it lists in `data.groups` exactly the groups of the plan, in dependency order, and publishes no `run-start`.
 - A failed plan publishes no `plan` / `written` event.
@@ -4623,11 +4626,7 @@ These use a mock model client that returns scripted drafts, and a fake bus.
 
 ### 5.10 Open Gaps
 
-Each id is a row in the [gap register](#appendix-b-gap-register); the rows are not copied here.
-
-| Gap | Question |
-|---|---|
-| [G-331](#g-331) | How a group rewrite takes its prompt, and what it does to a running or done group |
+No open gaps.
 
 ## 6. Context Manager
 
@@ -5045,7 +5044,7 @@ An empty required slot fails the brief before any model runs. An empty optional 
 | `layout` | Context Manager: repo tree, paths only | Required: planner |
 | `goal` | Caller (Intake Handler) | Required: planner |
 | `specs` | Caller: the source documents of a plan, or the spec anchors a task cites | Optional: planner, builder, reviewer |
-| `plan` | Caller: the stored plan, when a request amends one | Optional: planner |
+| `plan` | Caller: the stored plan, when a request changes the plan's shape or rewrites a group | Optional: planner |
 | `group`, `tasks` | Caller: the group's section of the plan, from the blueprint | Required: builder, reviewer, Quality Assurance |
 | `acceptance` | Caller: the acceptance criteria of the group's tasks, read from the blueprint | Required: Quality Assurance; a group whose tasks carry no criteria gets an empty section, not a failed brief |
 | `files` | Caller: the group's `files` | Required: builder, reviewer |
@@ -6480,7 +6479,7 @@ A builder that needs a file outside its group's files stops its session with a r
 6. The same session resumes with the answer in its brief.
 7. The block's cancel order does not stop a Task Manager that holds the open scope request: that Task Manager stays up to take the `continue`. A Task Manager that ended, such as one lost to an engine restart, is started again from the saved State, which carries `ScopeAdded` as `Progress.Widened`.
 
-`--approve` or `--deny` on a group blocked for any reason but `needs_scope` is refused with code `not_blocked`.
+`--approve` or `--deny` on a group blocked for any reason but `needs_scope` or `risky_change` is refused with code `not_blocked`. A group blocked on `risky_change` takes `--approve`, which lands it, or `--deny`, which drops it (rows 24 and 25). With a plan id alone, `--approve` answers every blocked group including the `high` and `critical` ones, and the reply names which of them were `high` or `critical`.
 
 #### Continuing a blocked group
 
@@ -6510,11 +6509,19 @@ A continue that is accepted returns the group to `Prior`, raises the epoch, ente
 `komodo run (id)` continues a group from its saved State, wherever it stopped: after a stop, a crash, a block or a hand fix in its worktree. A group never skips Test and Review on the way to commit.
 
 1. The engine loads the group's record through the State Manager.
-2. A Done group is left alone and the reply says so.
+2. A Done group is left alone and the reply says so, unless the request carries a prompt ([Rewriting a group from a prompt](#rewriting-a-group-from-a-prompt)).
 3. A Paused or Blocked group follows the table above and returns to `Prior`.
 4. A group saved in a working stage continues at that stage; a Build group with every task done goes on to Test and Review.
 5. A group whose stage, or whose `Prior`, is Commit re-enters Test and Review with the epoch raised (row 19). Its open Commit orders are dropped, since Commit runs again after approval.
 6. A group saved in Cleanup continues in Cleanup, because its work is already published.
+
+#### Rewriting a group from a prompt
+
+`komodo run <plan id> <group>` with a prompt rewrites that one group ([5.5](#55-behaviour)). What happens depends on the group's state:
+
+1. **Not started.** The group is rewritten in place and then runs.
+2. **Running.** The Runtime Manager stops the group (row 26), its finished tasks are kept, the planner rewrites the remaining tasks from the prompt, and the group continues.
+3. **Done.** The group gets new tasks that build on its landed work, runs, and lands again on the feature branch.
 
 #### Crash recovery and restarting groups
 
@@ -6584,16 +6591,16 @@ A Task Manager sends `timer.extend` when a session nears its wall limit and its 
 #### Dependents, completion and the run's end
 
 1. A group reaches Done at `group.closed`; the pool slot returns, the Runtime Manager calls `LeaseStore.Release` and runs `Pick` again.
-2. A group starts once every dependency is Done. Done means the Commit Handler landed the group and the Cleanup Handler closed it. A dependency that is Done with outcome `quarantined` does not release its dependents: they are deferred, neither blocked nor failed, until `Forge.Merged` reports the quarantine merged. The next `komodo run` checks this, fetches the epic branch and starts the deferred groups. Independent groups never notice a quarantine.
+2. A group starts once every dependency is Done. Done means the Commit Handler landed the group and the Cleanup Handler closed it. A group of level `high` or `critical` blocks with reason `risky_change` after its checks pass, so it is not Done and its dependents wait; they start once it lands. Independent groups never notice it.
 3. A dependent's branch is cut from its epic's branch `komodo/<epic>`, which holds every dependency that has landed. A dependency's pull request is not merged first: each epic has one pull request, opened when its last group lands and merged by a person.
-4. When every group is Done, the Runtime Manager publishes `run-complete` / `done`; when deferred groups remain, the event's data lists them with the quarantine each waits on. A deferred group is not a stall.
+4. When every group is Done, the Runtime Manager publishes `run-complete` / `done`; a group blocked on `risky_change` is listed by the stall rule below.
 5. When no group can run and at least one is Blocked, it publishes `run-failure` / `stalled`, listing each blocked group and its reason; the Error Handler and the CLI show it to the caller.
 6. `komodo abandon (plan id) (group label)` drops a group for good: the Runtime Manager stops the group, the group is Done with outcome `abandoned` (row 20), the Cleanup Handler's `Discard` frees its resources, and each dependent blocks with `dependency`.
 
 #### Landing on an epic's branch
 
 Each plan has one feature branch, `komodo/<epic>`, and every group lands on it. A group has no branch of its own: it works in a detached worktree. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
-- It squashes each approved group onto the epic's branch as one local commit, one group at a time per epic. A group of level `high` or `critical` is quarantined instead.
+- It squashes each approved group onto the epic's branch as one local commit, one group at a time per epic. A group of level `high` or `critical` first blocks for approval.
 - It rechecks the epic's branch after each landing; a failed recheck pauses landings on that epic until the recheck passes.
 - The Runtime Manager asks it to push the epic once the epic goes quiet (`settleEpicsLocked`, `internal/engine/epicpush.go`): none of the epic's groups works, waits for a start or can still start, and more groups are Done than the last push covered. `PushEpic` pushes the branch and opens or refreshes the epic's pull request only when `EpicPush.Done` names every group of the epic ([15.4](#154-interfaces)).
 - `tryPush` makes up to `PushTries` (3) tries; after a retryable `PublishError` it waits `PushRetryEvery` (30 s) before the second try and twice as long before the third. A push that fails for good is reported to the Error Handler and published as a `stalled` fact whose group is the epic and whose reason is `unpushed`; the landed work stays in the local epic branch. After a successful push it publishes `epic.pushed`, and `pr.opened` when the pull request address is set. A person merges the pull request.
@@ -6620,12 +6627,13 @@ stateDiagram-v2
   Done --> [*]
 ```
 
-Rows 2, 12 and 14 to 20 are left off the drawing:
+Rows 2, 12 and 14 to 26 are left off the drawing:
 - Any working stage, Paused and Blocked can enter Blocked (row 15), and Blocked can return to the stage it left.
 - A lost lease ends a group from any stage (row 16).
 - A plan pause reaches Paused by rows 17 and 18, the same Paused state as the drawing's row 9.
 - A group continued from Commit re-enters Test and Review (row 19).
 - `abandon` ends a group from any stage (row 20).
+- A high or critical group blocks after its checks and then lands or is dropped (rows 23 to 25); a prompt rewrite restarts a group's remaining tasks (row 26).
 
 Both tables below are one Go slice of `Transition`, whose `From`, `On` and `To` fields are the From, Input and To columns. For each input `Next` applies the first matching in-stage row, then the first matching stage-move row against the updated state; either may be absent. An input that matches neither is refused and logged, never dropped. Counter updates happen before any row.
 
@@ -6657,7 +6665,7 @@ type Transition struct {
 | 2 | Intake | `lease.granted` | | Intake | `Fence` set from the grant; orders `start_group` |
 | 3 | Intake | `ready` | | Build | Epoch + 1; orders `enter_stage` Build at the first task not done; emits `stage.enter` |
 | 4 | Build | `stage.done` Build | Every task is done | Test and Review | Epoch + 1; orders `enter_stage` Test and Review on the group's tree; emits `stage.enter` |
-| 5 | Test and Review | `stage.done` | Quality Assurance approved and, at level medium or above, the Reviewer too | Commit | Epoch + 1; orders `enter_stage` Commit; emits `stage.enter` |
+| 5 | Test and Review | `stage.done` | Quality Assurance approved and, at level medium or above, the Reviewer too, and the level is below `high` | Commit | Epoch + 1; orders `enter_stage` Commit; emits `stage.enter` |
 | 6 | Test and Review | `result.fail` | `RetriesLeft` above 1; fingerprint and tree both differ from the last return | Build | `RetriesLeft` - 1 and `retry.spent` emitted; `FailureHash` and `ReturnTree` set; orders `cancel` for a live sibling, then `enter_stage` Build with the findings; emits `stage.enter`. A failed mechanical check arrives here too, with its exact output as the findings |
 | 7 | Commit | `stage.done` | Published | Cleanup | Epoch + 1; orders `enter_stage` Cleanup; emits `stage.enter` |
 | 8 | Cleanup | `group.closed` | | Done | `Outcome` complete; returns the slot; calls `LeaseStore.Release`; emits `group.done` |
@@ -6675,6 +6683,10 @@ type Transition struct {
 | 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
 | 21 | Blocked on `retries` | `override` | Before `Block.Until` | Build | `RetriesLeft` set to 1; `FinalWallMin` set to the minutes in the request (`limits.group_wall_min` when it carries none; a value outside 1 to 480 is refused); `Overrides` + 1; `Tries` + 1; Test and Review results cleared; orders `enter_stage` Build with `LastFindings` and the failing items; judges run again only after the Builder's next change; Epoch + 1; emits `override.approved`, `group.resumed`, `stage.enter` |
 | 22 | Blocked on `retries` | `timer.due` reason `override_lapse` | `Block.Until` reached | Done | `Outcome` failed; orders `cancel` and `release`; emits `override.lapsed`, `group.failed`, `group.done`; the history stays and the Cleanup Handler may free the worktree and caches |
+| 23 | Test and Review | `stage.done` | The same approvals, and the level is `high` or `critical` | Blocked | `Prior` = stage; `Block.Reason` `risky_change` with the question "land this risky change?"; emits `group.blocked` |
+| 24 | Blocked on `risky_change` | `continue` with `Answer` approve | | Commit | Epoch + 1; orders `enter_stage` Commit; emits `group.resumed`, `stage.enter` |
+| 25 | Blocked on `risky_change` | `continue` with `Answer` deny | | Done | The group is dropped [TODO: the outcome recorded, what its dependents do and what the Cleanup Handler frees ([G-332](#g-332))]; emits `group.done` |
+| 26 | Any working stage | `rewrite` | A prompt rewrites the group ([5.5](#55-behaviour)) | Build | The Runtime Manager stops the group; its finished tasks are kept; the planner rewrites the remaining tasks; the group continues; Epoch + 1; emits `group.resumed`, `stage.enter` |
 
 #### The retry budget
 
@@ -6955,14 +6967,17 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A run whose epic branch is missing gets it created from the base branch, with no commit of its own, before the first group worktree is created; an existing epic branch is left as it is.
 - A queued entry fires: the engine publishes the entry's stored `start` as the `run-start` data, and the event carries the `run_id` the queue reply returned.
 - Closing a group calls `LeaseStore.Release` once.
+- A prompt rewrite of a group that has not started rewrites it in place and then runs it.
+- A prompt rewrite of a running group stops it, keeps its finished tasks, rewrites the remaining tasks and continues it.
+- A prompt rewrite of a done group adds tasks that build on its landed work, runs it, and lands it again on the feature branch.
+- A group of level `critical` that passes its checks is Blocked on `risky_change`; its dependents do not start and an independent group runs on.
 
 ### 7.10 Open Gaps
 
 | Gap | Question | Closes by |
 |---|---|---|
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
-| [G-307](#g-307) | How the epic branch reaches the remote when a quarantine needs it | Owner decision |
-| [G-308](#g-308) | The epic pull request while groups are deferred | Owner decision |
+| [G-308](#g-308) | The epic pull request while a risky group is blocked or dropped | Owner decision |
 ## 8. Cache Manager
 
 The Cache Manager is the local cache for pieces of context and for prompt-cache markers. It keeps what is expensive to rebuild so the harness does not pay for it twice: pieces of context, and the plan that tells the model client which parts of a prompt the provider may remember. It never stores a model's answer, so a model call is always a real call. Every entry is found by a fingerprint of its inputs, so an entry is either exactly right or absent. The purpose of the subsystem and who it talks to are in [HLD 5.9](hld.md#59-cache-manager).
@@ -8069,7 +8084,7 @@ type GroupState struct {
 	Stage       Stage         `json:"stage"`        // current stage
 	Prior       Stage         `json:"prior"`        // the working stage a paused or blocked group left
 	Epoch       uint32        `json:"epoch"`        // rises each time the group enters a stage; an input from an older epoch is stale
-	Outcome     string        `json:"outcome"`      // set in done: complete, lost, abandoned or quarantined
+	Outcome     string        `json:"outcome"`      // set in done: complete, lost or abandoned
 	Fence       uint64        `json:"fence"`        // the Lease Manager's fence for this holder; never zero
 	ConfigHash  string        `json:"config_hash"`  // SHA-256 of the settings pinned at run start
 	Version     string        `json:"version"`      // Komodo version that started the group
@@ -10209,7 +10224,7 @@ flowchart TB
 3. The checks run as Go code in Quality Assurance's sandbox. Only a clean result starts Quality Assurance and the reviewer together; each ends with an `Outcome`. The pipeline waits for both, unless the reviewer returns first (rework rules).
 4. A failed check goes straight back to Build with the exact output, and no model is called ([Checks before the sessions](#115-behaviour)).
 5. Both roles `pass`; a group of risk level `low` or `med_low` skips the reviewer, and Quality Assurance alone must pass.
-6. The pipeline calls `Committer.Publish` (`Committer.Quarantine` for a group of risk level `high` or `critical`). The Commit Handler squashes the group onto its epic's branch locally, one group at a time per epic, and rechecks that branch. A failed recheck pauses landings on that epic until it passes. When the last group of the epic lands, the Commit Handler pushes once and opens one pull request for the epic, and a person merges it.
+6. The pipeline calls `Committer.Publish`; a group of risk level `high` or `critical` first blocks for approval ([7.5](#75-behaviour)). The Commit Handler squashes the group onto its epic's branch locally, one group at a time per epic, and rechecks that branch. A failed recheck pauses landings on that epic until it passes. When the last group of the epic lands, the Commit Handler pushes once and opens one pull request for the epic, and a person merges it.
 7. The Commit Handler then calls the Cleanup Handler ([chapter 15](#15-commit-handler)). The Task Manager does not call it.
 8. The Cleanup Handler removes the group's worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
 9. If either role returned, the pipeline runs the rework check.
@@ -12353,7 +12368,7 @@ The Reviewer is the final code check on the Builder's work. It starts once the f
 | Confidence | The Reviewer's score for a finding, from 0 to 100; 80 is the least at which a blocking level blocks. |
 | Level | The rule's rank: `critical`, `high`, `med_high`, `medium`, `med_low` or `low`; its bucket decides what the finding does. |
 | Risk level | The level Go sets for a group from its diff, with the same six names; no agent sets or lowers it. |
-| Quarantine | The route of a `high` or `critical` group: its own draft pull request, built on by nothing until a person merges it ([15.5](#155-behaviour)). |
+| Quarantine | The wait of a `high` or `critical` group for approval before it lands ([15.5](#155-behaviour)). |
 | Verdict | The Reviewer's answer for one task identifier: `met`, `not_met` or `brief_incomplete`. |
 | Profile | The review depth: `thorough` or `economy`. It has no link to the cache. |
 | Round | One pass of the Builder followed by the mechanical checks, Quality Assurance and the Reviewer on the same work under test. |
@@ -12619,7 +12634,7 @@ Each level takes one route:
 | `low`, `med_low` | Go's free checks and Quality Assurance, with no Reviewer; the group lands on the epic's branch |
 | `medium` | Quality Assurance and the Reviewer with proof-backed, confidence-scored findings; itemized in the epic pull request |
 | `med_high` | As `medium`, plus the fuzz, mutation and benchmark checks of [13.5](#running-the-deep-checks) |
-| `high`, `critical` | As `med_high`, then quarantine: the group's own draft pull request, with no CI ([15.5](#155-behaviour)) |
+| `high`, `critical` | As `med_high`, then quarantine: the group blocks for approval before it lands ([15.5](#155-behaviour)) |
 
 The race detector runs on every route.
 
@@ -13103,7 +13118,7 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 - A finding about a line the group did not change is dropped: it is not on the pull request and not in the run record.
 - A diff that adds an exported Go declaration raises a `medium` group to `med_high`, so the Reviewer runs.
 - A `low` group with passing free checks and a passing Quality Assurance reaches the Commit Handler with 0 Reviewer sessions; with no Quality Assurance verdict it waits.
-- A `critical` group reaches quarantine, not the epic branch.
+- A `critical` group waits for approval and does not reach the epic branch before it.
 
 ### 14.10 Open Gaps
 
@@ -13116,7 +13131,7 @@ No key lowers a level or sets one, and no key lists sensitive paths.
 The Reviewer's tool list holds only Komodo's tools. Outside Model Context Protocol servers (a standard way for a model to call outside tools) are off by default: a person adds them to the Context Manager's list and switches them on for named agents. Each runs inside the sandbox with no network unless its entry allows a host. Every call passes the Task Manager's guard and is recorded as an event.
 ## 15. Commit Handler
 
-The Commit Handler saves and publishes a task group's work. During the build it records each finished task as a local commit and pushes nothing. After the judges its risk level requires approve the same tree, it lands the group on its epic's shared branch as one squashed commit, locally. When the epic's last group has landed, it pushes that branch once and opens one pull request (the hosting service's page where a person reviews and merges a branch) for the whole epic. A group of risk level `high` or `critical` gets its own quarantined draft pull request instead. It is the only part of the harness that pushes, and it hands each landed group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
+The Commit Handler saves and publishes a task group's work. During the build it records each finished task as a local commit and pushes nothing. After the judges its risk level requires approve the same tree, it lands the group on its epic's shared branch as one squashed commit, locally. When the epic's last group has landed, it pushes that branch once and opens one pull request (the hosting service's page where a person reviews and merges a branch) for the whole epic. A group of risk level `high` or `critical` first waits for a person to approve landing it. It is the only part of the harness that pushes, and it hands each landed group to the Cleanup Handler. See [HLD 5.16](hld.md#516-commit-handler).
 
 ### 15.1 Scope and Concepts
 
@@ -13130,9 +13145,9 @@ The Commit Handler owns four things: the local save of a finished task, the publ
 | Epic branch | The plan's feature branch, named `komodo/<epic>`, such as `komodo/plan-7f3a9c`; every group of the plan lands on it, and it is the head of the plan's one pull request |
 | Save | A local commit of a finished task's work in the group's worktree; it is never pushed |
 | Landing | Squashing one approved group into the epic branch as one local commit; one group at a time per epic. Nothing is pushed by a landing |
-| Quarantine | The route of a group of risk level `high` or `critical`: its own draft pull request and no CI [TODO: how the quarantine route works when a group has no branch of its own ([G-330](#g-330))] |
-| Deferred group | A group that waits on a quarantined group's work; it is not blocked and starts when the quarantine is merged |
-| Push budget | One push per pull request: the epic branch once after its last landing, and each quarantine branch once |
+| Quarantine | The wait of a group of risk level `high` or `critical`: after it passes its checks it blocks with the question "land this risky change?" until a person or the orchestrator answers |
+| Deferred group | A group that waits on a quarantined group's work; it starts when that group lands |
+| Push budget | One push per pull request: the epic branch once, after its last landing |
 | Recheck | The checks that call no model, run on the epic branch after each landing |
 | Critical reference | Any git reference outside `refs/heads/komodo/` and `refs/komodo/`, such as `main` |
 | Fence | A counter the Lease Manager raises each time it grants a group's lease; an older holder's number is refused |
@@ -13151,7 +13166,7 @@ What lies beside it:
 - Quality Assurance and the Reviewer judge the work; the Commit Handler never re-judges it.
 - The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
 - The Task Manager creates each group's detached worktree and calls `Save` after each finished task; the Cleanup Handler removes them ([chapter 16](#16-cleanup-handler)).
-- The Commit Handler commits no plan: plans live outside the repository. The plan's pull request carries a high-level summary of the plan, all the changes and a changelog reference. [TODO: how a lasting record of task groups, such as a changelog anchor, is kept ([G-323](#g-323))] [TODO: how the epic branch reaches the remote when a quarantine needs it ([G-307](#g-307))]
+- The Commit Handler commits no plan: plans live outside the repository. The plan's pull request carries a high-level summary of the plan, all the changes and a changelog reference. [TODO: how a lasting record of task groups, such as a changelog anchor, is kept ([G-323](#g-323))]
 - No command reaches the Commit Handler. `komodo run (id)` continues a group, and only a group with the approvals its level requires publishes; `replay` changes nothing.
 
 ### 15.2 Package Layout
@@ -13252,7 +13267,7 @@ type Approval struct {
 | Field | Rule |
 |---|---|
 | `tree` | Must equal `qa.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs. A group of level `low` or `med_low` has no Reviewer verdict, so `reviewer.tree` is empty and not compared |
-| `level`, `reason` | Set by Go's `Classify`; The Task Manager sends `low` to `med_high` to `Publish` and `high` and `critical` to `Quarantine` |
+| `level`, `reason` | Set by Go's `Classify`; The Runtime Manager blocks `high` and `critical` for approval before `Publish` ([7.5](#75-behaviour)) |
 | `fence` | Must equal the lease's fence when read just before the push |
 | `epic_groups` | Every group label of the epic; the epic's last landing is the one after which each label has landed |
 | `facts` | Supplied by the Task Manager from recorded results; the handler never reruns a test |
@@ -13381,7 +13396,7 @@ type EpicResult struct {
 }
 ```
 
-`Publish` pushes nothing and calls no forge; `last` is true when its landing was the epic's last. `PushEpic` pushes and opens the pull request. It returns no pull request address until `Done` names every label in `epic_groups` and the epic is not paused. The epic's pull request is titled `<epic label>: <N> task groups`, such as `plan-7f3a9c: 2 task groups`, where N is the number of labels in `epic_groups`, and it carries the label named by `commit.pr_label`. It is always opened ready for review, never as a draft; only a quarantine pull request is a draft.
+`Publish` pushes nothing and calls no forge; `last` is true when its landing was the epic's last. `PushEpic` pushes and opens the pull request. It returns no pull request address until `Done` names every label in `epic_groups` and the epic is not paused. The epic's pull request is titled `<epic label>: <N> task groups`, such as `plan-7f3a9c: 2 task groups`, where N is the number of labels in `epic_groups`, and it carries the label named by `commit.pr_label`. It is always opened ready for review, never as a draft.
 
 ### 15.4 Interfaces
 
@@ -13444,8 +13459,7 @@ type Cleaner interface {
 | Runtime Manager | `PushEpic` | The epic goes quiet with more groups Done than its last push covered ([7.5](#75-behaviour)) |
 | `PushEpic` | `Cleaner.CompleteEpic` | The epic is last, its pull request is open and the push succeeded |
 | Task Manager | `Save` | A task of the group is finished |
-| Task Manager | `Publish` | The judges the group's risk level requires approved the same tree, and the level is below `high` |
-| Task Manager | `Quarantine` | The same, and the level is `high` or `critical` |
+| Task Manager | `Publish` | The judges the group's risk level requires approved the same tree and, at level `high` or `critical`, a person or the orchestrator approved landing it |
 | `Publish` | `Cleaner.Complete` | The landing, the push and, after the last group, the pull request step are done |
 
 #### Landing and recheck
@@ -13621,10 +13635,8 @@ type PR struct {
 type Forge interface {
 	// FindPR returns the open pull request whose head is the branch.
 	FindPR(ctx context.Context, head string) (PR, bool, error)
-	// OpenPR opens a pull request from head into base, with the label; draft is true only for a quarantine.
-	OpenPR(ctx context.Context, base, head, title, body, label string, draft bool) (PR, error)
-	// Merged reports whether the pull request whose head is the branch was merged.
-	Merged(ctx context.Context, head string) (bool, error)
+	// OpenPR opens a ready pull request from head into base, with the label.
+	OpenPR(ctx context.Context, base, head, title, body, label string) (PR, error)
 	// UpdatePR replaces the title and body of an open pull request.
 	UpdatePR(ctx context.Context, url, title, body string) error
 }
@@ -13674,7 +13686,7 @@ flowchart TB
 5. The landing squashes, as the epic landing steps below describe, and never rebases. The worktree's commits squash into the epic branch by the commit id verified in step 3 and after the sync, never by a branch name. A conflict is `ErrConflict` and frees the turn with `Release`.
 6. `Check.Recheck` runs on the local epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`; the check result decides, so a failed `epic.paused` report is added to the error and does not change its kind.
 7. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last and `Result.Last` is true. `Publish` pushes nothing; the push is `PushEpic` (below).
-8. `PushEpic` takes the epic's turn with `Epics.Lock`, fetches the remote epic branch and merges it in, fetches the base branch, and lists the landings. With no landing it returns. Otherwise it reads `RemoteTip`, skips the push when the remote already holds the local tip, pushes the epic branch once, and fails unless the remote then holds the local tip. When every group has landed, `Done` names every group and the epic is not paused, `Forge.FindPR` looks for a pull request on the epic branch: if none exists, `OpenPR` opens one; if one exists and the push changed the branch, `UpdatePR` refreshes its body from `RenderEpicBody`. After that, when the epic is last and has a pull request, it calls `Cleaner.CompleteEpic`; a cleanup error goes into `EpicResult.CleanupError` and fails nothing. [TODO: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again ([G-308](#g-308))]
+8. `PushEpic` takes the epic's turn with `Epics.Lock`, fetches the remote epic branch and merges it in, fetches the base branch, and lists the landings. With no landing it returns. Otherwise it reads `RemoteTip`, skips the push when the remote already holds the local tip, pushes the epic branch once, and fails unless the remote then holds the local tip. When every group has landed, `Done` names every group and the epic is not paused, `Forge.FindPR` looks for a pull request on the epic branch: if none exists, `OpenPR` opens one; if one exists and the push changed the branch, `UpdatePR` refreshes its body from `RenderEpicBody`. After that, when the epic is last and has a pull request, it calls `Cleaner.CompleteEpic`; a cleanup error goes into `EpicResult.CleanupError` and fails nothing. [TODO: when the epic's last landing is reached while a risky group is blocked or dropped, and whether landing it later pushes again ([G-308](#g-308))]
 9. `Report` sends `publish.done` with a `Result`. The Runtime Manager publishes `epic.pushed` after each `PushEpic` and `pr.opened` when `EpicResult.PRURL` is set ([7.5](#75-behaviour)). A person or the orchestrator waiting on a run wakes on `pr.opened`.
 10. `Publish` calls `Cleaner.Complete` with the worktree's tip, the commit that holds the group's work (`landed`) and the local epic branch (`into`); the remote is not consulted. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. The Cleanup Handler removes the worktree under the rule in [16.5](#165-behaviour).
 
@@ -13698,12 +13710,12 @@ The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, 
 
 Every group lands on its epic's branch `komodo/<epic>`. Steps 4 to 7 of Publish do the following.
 
-1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists locally, because the Runtime Manager created it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings in the remote tip when the remote has one. [TODO: how the epic branch reaches the remote for a quarantine ([G-307](#g-307))] The landing worktree is `<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree and is set to the repository's landing folder by the binary, matching the Cleanup Handler's `Roots.Landings/<epic>`; a repeat finds it and adds nothing.
+1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists locally, because the Runtime Manager created it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings in the remote tip when the remote has one. The landing worktree is `<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree and is set to the repository's landing folder by the binary, matching the Cleanup Handler's `Roots.Landings/<epic>`; a repeat finds it and adds nothing.
 2. In the group's worktree, `Merge` merges the epic branch into the worktree's HEAD with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, in the worktree, and never on the epic branch.
 3. In the landing worktree, `Squash` merges the worktree's commits into the epic branch as one new commit with a single parent. The commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later. When `Landed` already lists the group's label, steps 2 and 3 are skipped; this is how a repeated `Publish` avoids a second landing.
 4. A landing pushes nothing. The epic branch is pushed once, by the last landing (Publish step 7), and a group's worktree commits are never pushed.
 5. The Commit Handler asks the group's Task Manager to run the recheck on the local epic branch at the tip just landed, in the group's Docker container. The turn stays held until the recheck result is recorded in `Turn.Finish`.
-6. Only the epic's pull request targets the base branch. A group gets a pull request only through quarantine.
+6. Only the epic's pull request targets the base branch. A group gets no pull request of its own.
 
 **📐 What a recheck decides for the groups waiting to land**
 ```mermaid
@@ -13722,7 +13734,7 @@ flowchart TB
 
 #### Plans are not committed
 
-No step of the Commit Handler commits the plan. The epic branch holds only landed groups, and the pull request carries only group titles. [TODO: how the epic branch reaches the remote when a quarantined pull request needs it as its base ([G-307](#g-307))]
+No step of the Commit Handler commits the plan. The epic branch holds only landed groups, and the pull request carries only group titles.
 
 #### Base branch
 
@@ -13730,36 +13742,23 @@ The base branch is the value of `commit.base_branch`; when it is empty, it is th
 
 #### Quarantine
 
-A group whose risk level is `high` or `critical` is never landed on the epic branch. The Task Manager calls `Quarantine` instead of `Publish`, and the run moves on.
+A group whose risk level is `high` or `critical` waits for approval before it lands. It has no pull request of its own and no branch of its own.
 
-1. `Quarantine` checks the approval and the lease as `Publish` does (steps 1 to 3). [TODO: how the quarantine route works when a group has no branch of its own: where the approved work is committed, what is pushed, and what the draft pull request is made from ([G-330](#g-330))]
-2. `Forge.OpenPR` opens a draft pull request into the epic branch, with a title ([TODO: the quarantine pull request's title ([G-313](#g-313))]), the label `commit.pr_label` and `RenderBody` as its body. Because it is a draft and the push rule gives CI one push per pull request, a repository whose workflow skips drafts starts no CI. [TODO: the draft-skip line a repository's workflow needs is an edit to the target repository, not Komodo's ([G-306](#g-306))]
-3. The group is Done with outcome `quarantined`, and the Cleanup Handler runs. Groups that depend on it are deferred: they are not blocked and not failed, and the run finishes every other group.
-4. The plan's pull request body lists each quarantined pull request and each deferred group.
-5. When a person merges the quarantine into the epic branch, the next `komodo run` finds it with `Forge.Merged`, fetches the epic branch and starts the deferred groups from the new tip.
-
-```go
-// QuarantineResult is what a finished Quarantine returns.
-type QuarantineResult struct {
-	Branch string `json:"branch"`  // the quarantine branch that was pushed
-	PRURL  string `json:"pr_url"`  // the draft pull request into the epic branch
-	PRNew  bool   `json:"pr_new"`  // true when this call opened it
-}
-
-// Quarantine pushes the approved work once and opens a draft pull request into the epic branch.
-func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult, error)
-```
+1. After the group passes its checks, the Runtime Manager blocks it with reason `risky_change` and the question "land this risky change?" ([7.5](#75-behaviour)). The Commit Handler is not called, and nothing is committed, pushed or opened.
+2. `komodo run <plan id> <group> --approve` lands the group: it enters the Commit stage and `Publish` lands it on the epic branch like any other group.
+3. `komodo run <plan id> <group> --deny` drops the group. [TODO: the outcome recorded for a dropped risky group, what its dependents do and what the Cleanup Handler frees ([G-332](#g-332))]
+4. Groups that depend on the risky group wait; every other group carries on.
+5. `komodo run <plan id> --approve`, which answers every blocked group, also lands the `high` and `critical` groups; one command lands all of them, and the reply names which groups were `high` or `critical`.
 
 #### Pull request shapes
 
 | Case | Branch pushed | Pull request | Opened |
 |---|---|---|---|
-| Epic | `komodo/<epic>`, once | Ready, into the base branch; the plan summary, all changes and the changelog reference; lists every quarantine; a person merges | After the epic's last landing |
-| Quarantine | The quarantine branch, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
+| Epic | `komodo/<epic>`, once | Ready, into the base branch; the plan summary, all changes and the changelog reference; a person merges | After the epic's last landing |
 
 #### Push budget
 
-A push is what wakes CI; a local commit costs nothing. So each group lands as one squashed commit, locally, and Komodo pushes once per pull request: the epic branch after its last landing, and each quarantine branch once. CI runs once per pull request instead of once per group. The task commits in the group's worktree (`Save`) stay local and are squashed away by the landing.
+A push is what wakes CI; a local commit costs nothing. So each group lands as one squashed commit, locally, and Komodo pushes once per pull request: the epic branch after its last landing. CI runs once per pull request instead of once per group. The task commits in the group's worktree (`Save`) stay local and are squashed away by the landing.
 
 ### 15.6 State
 
@@ -13771,7 +13770,6 @@ The Commit Handler keeps no state on disk. The group's stage lives in the State 
 | Group worktree | Approved | `Commit` | The approved content is a commit in the worktree |
 | Epic branch | Landed | `Squash` | The local epic tip holds the group as one commit; nothing is pushed |
 | Epic branch | Pushed | `Push` after the last landing | The remote holds the epic tip |
-| Quarantine branch | Pushed | `Quarantine` | The remote holds the quarantine branch and a draft pull request names it |
 | Epic branch | Paused | A failed recheck | Only the group that paused it may land |
 | Pull request | Open | `OpenPR` | A ready pull request names the epic branch |
 | Pull request | Current | `UpdatePR` | The body matches the latest facts |
@@ -13803,15 +13801,15 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 
 #### Invariants
 
-1. Only the Commit Handler pushes, only a `komodo/` branch to its own name, and once per pull request: the epic branch after its last landing, and each quarantine branch once.
+1. Only the Commit Handler pushes, only a `komodo/` branch to its own name, and once per pull request: the epic branch after its last landing.
 2. `Publish` commits only content whose tree hash equals the approved tree hash; `Save` commits finished-task work locally and never pushes.
 3. Every approval names the same tree; a rework returns the group to the Builder and voids them.
 4. The fence is read again just before every push; a higher number refuses the push.
 5. No force, no remote deletion, no trailer and no critical reference, in any method.
 6. One group at a time lands on an epic, and a paused epic admits only the group that paused it.
-7. One ready pull request exists per epic, opened once the last group has landed; a quarantined group has its own draft pull request into the epic branch.
+7. One ready pull request exists per epic, opened once the last group has landed; no group has a pull request of its own.
 8. The pull request body comes from recorded results, never from a rerun, and shows each group's risk level and the rule that set it.
-9. A group of level `high` or `critical` never lands on the epic branch except through a person's merge of its quarantine pull request.
+9. A group of level `high` or `critical` never lands on the epic branch until a person or the orchestrator answers its question with `--approve`.
 10. Each group lands as one squashed commit.
 
 #### Failures
@@ -13830,7 +13828,6 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 | Crash after the landing, before the recheck | `Landed` lists the group on repeat | The squash is skipped; the recheck runs | Landed |
 | Epic push fails for good | `PushEpic` fails 3 tries, 30 s then 60 s apart | The Runtime Manager publishes `stalled` with reason `unpushed`; landed work stays in the local epic branch | The run ends with the epic unpushed |
 | Crash after the last push, before the pull request | The remote holds the tip on repeat | Push skipped; `FindPR`, then `OpenPR` | Pull request open |
-| Crash after a quarantine push, before the draft pull request | The remote holds the quarantine branch on repeat | Push skipped; `FindPR`, then `OpenPR` as a draft | Quarantined |
 | Crash after the pull request, before cleanup | `FindPR` finds it on repeat | `UpdatePR`, then `Cleaner.Complete` | Cleanup runs |
 
 The retry schedule and the block reasons belong to the Runtime Manager ([chapter 7](#7-runtime-manager)); the numbers above are the schedule it applies to a retryable `PublishError`.
@@ -13867,9 +13864,10 @@ Component tests use a local bare repository as the remote and a mock `gh` that r
 - After an engine restart, the first landing on an epic runs the recheck before the merge.
 - The first group of 2 opens no pull request and pushes nothing; the second pushes the epic branch once and opens exactly one pull request, from `komodo/<epic>` into the base branch.
 - Each landed group is one single-parent commit on the epic branch, and `Landed` reads its label and section back.
-- A `critical` group opens a draft pull request into the epic branch after one push, lands nothing on the epic branch, and its dependents are deferred, not blocked.
-- After the quarantine is merged, `Forge.Merged` is true and the next run starts the deferred groups from the new epic tip.
-- Over a run of 3 landed groups and 1 quarantine, the remote receives 2 pushes.
+- A `critical` group that passes its checks is blocked with the question "land this risky change?", lands nothing on the epic branch, opens no pull request and pushes nothing.
+- `komodo run <plan id> <group> --approve` on that group lands it on the epic branch as one commit.
+- `komodo run <plan id> <group> --deny` on that group drops it and lands nothing.
+- Two blocked groups, one `critical`: one `komodo run <plan id> --approve` lands both, and the reply names the `critical` one.
 - The epic's pull request is titled `<epic label>: <N> task groups`.
 - A second `Publish` with the same approval opens no second pull request and calls `Complete` again.
 - A crash simulated between push and pull request opens the pull request on the repeat.
@@ -13882,12 +13880,9 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-306](#g-306) | The draft-skip line in a repository's workflow | 15.5 |
-| [G-307](#g-307) | How the epic branch reaches the remote when a quarantine needs it | 15.5 |
-| [G-308](#g-308) | The epic pull request while groups are quarantined or deferred | 15.5 |
-| [G-313](#g-313) | The title of a quarantine pull request | 15.5 |
+| [G-308](#g-308) | The epic pull request while a risky group is blocked or dropped | 15.5 |
 | [G-323](#g-323) | How the changelog is anchored | 15.1, 15.3 |
-| [G-330](#g-330) | How the quarantine route works when a group has no branch | 15.5 |
+| [G-332](#g-332) | What a dropped risky group leaves behind | 15.5 |
 
 ## 16. Cleanup Handler
 
@@ -15877,7 +15872,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | Cache | Repeat an identical request | Context pieces come from the cache, and every request still makes a new model call |
 | Epic landing | An epic of 2 groups, with a seeded failing recheck after the first landing | Landings go one at a time onto `komodo/plan-7f3a9c` as one squashed commit each; the epic pauses; the second group lands only after a recheck passes; the remote receives 1 push and 1 pull request opens after the last landing |
 | Risk routing | A fixture with a docs-only group, an ordinary group and a group that edits a workflow file | The docs group lands with Quality Assurance and 0 Reviewer sessions; the ordinary group gets Quality Assurance and the Reviewer; the workflow group is `critical` and opens a draft pull request into `komodo/plan-7f3a9c` |
-| Quarantine | A `critical` group with a dependent and an independent group | The independent group lands; the dependent is deferred, not blocked; after the draft is merged, `komodo run` builds the dependent |
+| Quarantine | A `critical` group with a dependent and an independent group | The critical group blocks with "land this risky change?"; the independent group lands; the dependent waits; after `run <plan id> <group> --approve` the critical group lands on the feature branch and the dependent starts |
 | Finding confidence | A seeded critical finding with a proof at confidence 79, one with no proof, and one with a proof at confidence 80 | The first two are warnings on the pull request; the third returns the group to the Builder |
 | Added lines at 90% | Go tests `TestCheckCoverageStepFailsWhenAddedLinesAreUnderTheFloor` and `TestNewLinesLevelHoldsAddedLinesToTheFloor`: a change whose added executable lines are 80% covered, then 90% covered, with `check.coverage` at 90 | At 80% the coverage step fails and lists the uncovered added lines; at 90% it passes |
 | Confidence 80 for the judges | Go tests `TestQAJudgeSignsOffAPassedItemOnlyAtConfidence80` and `TestReviewerJudgeWarnsOnABlockingFindingBelowConfidence80OrWithoutAProof`: a passed Quality Assurance item at confidence 79 and at 80; a blocking finding at 79 and at 80 | A passed item below 80 returns the group to the Builder; a blocking finding below 80 is a warning |
@@ -16168,19 +16163,15 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-298"></a>G-298 | Sandbox | A builder-added Go dependency is fetched on the host with the person's login: the host fill runs `go mod download` again when `go.mod` or `go.sum` changes, so a module the builder names is downloaded outside the sandbox. The owner accepted this risk; open: whether to limit host fills to modules already in `go.sum`, or to `GOPRIVATE` hosts | Owner decision | [11](#11-task-manager) |
 | <a id="g-299"></a>G-299 | Task Manager | Check output limit: the runner the mechanical checks use returns a command's whole output up to 16 MB and, past it, the exit code, the head and tail in 4 KB and an over-limit error, while tool replies keep 4 KB. The owner decided this; the 16 MB limit is unmeasured for very large repositories | Owner decision | [11](#11-task-manager) |
 | <a id="g-305"></a>G-305 | Risk levels | Whether sensitivity is implied or set by a change-risk skill, and how that skill fits the Go-rule risk levels; the owner decided there is no list of sensitive paths | Owner decision | [14](#14-reviewer) |
-| <a id="g-306"></a>G-306 | Quarantine | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: whether a quarantine draft pull request skips CI | Deferred, until the CICD runner image is set | [15](#15-commit-handler) |
-| <a id="g-307"></a>G-307 | Push budget | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: how the epic branch reaches the remote when a quarantine pull request needs it as its base | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
-| <a id="g-308"></a>G-308 | Epic pull request | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again. Option A, a draft epic pull request at run end listing landed, quarantined and deferred groups and marked ready when all land, is close, pending CICD refinement | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
+| <a id="g-308"></a>G-308 | Epic pull request | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; the owner may need GitHub Actions that poll CodeDeploy results. Open: when the epic's last landing is reached while a risky group is blocked or dropped, and whether landing that group later pushes again | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
 | <a id="g-310"></a>G-310 | Deep checks | Which Go mutation tool; a quick proof of concept picks it. Other languages come later | Quick proof of concept | [13](#13-quality-assurance) |
 | <a id="g-311"></a>G-311 | Surviving mutants | What a surviving mutant does now that Quality Assurance writes no tests; Go records it | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-312"></a>G-312 | Quality Assurance gate | Whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-quality-assurance) |
-| <a id="g-313"></a>G-313 | Quarantine title | The title of a quarantine pull request; proposal, not decided: `<label>: <goal>` | Owner decision | [15](#15-commit-handler) |
 | <a id="g-314"></a>G-314 | Risk levels | Deferred until the CICD runner is refined. Whether `cicd.yaml` and compose files count as `critical`, and whether the path tables of 14.3 hold, including migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` | Deferred, until the CICD runner is refined | [14](#14-reviewer) |
 | <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`); the risk rules name it, but no caller sets it. Public interface detection is built: a line scan of the diff for changes to exported Go declarations | After the trial runs | [14](#14-reviewer) |
 | <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
-| <a id="g-330"></a>G-330 | Quarantine without a group branch | A group has no branch of its own: its worktree is detached and its work lands on the plan's feature branch. Owner: "The plan opens a feature branch for all task groups + tasks. Everything funnels into this feature branch." Open: how the quarantine route (a high or critical group's own draft pull request) works when a group has no branch: where the approved work is committed, what is pushed, and what the pull request is made from | Owner decision | [15](#15-commit-handler) |
-| <a id="g-331"></a>G-331 | Group rewrite | Owner: "what it would do is replan/rewrite the taskgroup depending. SO for example a prompt + 'komodo run <plan id> <TG id>' makes the changes." Decided: the planner rewrites that one group from the prompt, the lint checks run again on the plan, and the group runs. Open: how the prompt is passed on the command line, and what the rewrite does for a group that is running or done | Owner decision | [1](#1-cli), [5](#5-intake-handler) |
+| <a id="g-332"></a>G-332 | Dropped risky group | `komodo run <plan id> <group> --deny` on a high or critical group drops it. Open: the outcome recorded for the dropped group, what its dependents do, and what the Cleanup Handler frees | Owner decision | [15](#15-commit-handler), [7](#7-runtime-manager) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

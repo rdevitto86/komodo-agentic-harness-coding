@@ -2,7 +2,7 @@
 
 ## 0. Front Matter
 
-This document is the high-level design of Komodo, a single Go program that runs model agents to plan, build, test, review and publish code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document. Its structure follows the owner's component diagram. An open decision is written as a TODO that names its [gap register](lld.md#appendix-b-gap-register) row, such as G-306.
+This document is the high-level design of Komodo, a single Go program that runs model agents to plan, build, test, review and publish code. The [Low-Level Design](lld.md) holds the types, algorithms, limits and configuration keys. The domain architect owns this document. Its structure follows the owner's component diagram. An open decision is written as a TODO that names its [gap register](lld.md#appendix-b-gap-register) row, such as G-308.
 
 ## 1. Introduction and Goals
 
@@ -198,7 +198,7 @@ The Reviewer is the final code check of the group's own changes, skipped at `low
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and the changelog reference. A high or critical group gets its own quarantined draft pull request [TODO: how quarantine works without a group branch ([G-330](lld.md#g-330))]; groups that depend on it are deferred until it merges, and the run never waits for them [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and the changelog reference. A high or critical group blocks after it passes its checks with the question "land this risky change?": approving lands it on the feature branch and denying drops it, groups that depend on it wait, and other groups carry on. One `komodo run <plan id> --approve` answers every blocked group, including these. [TODO: epic pull request details while a risky group is blocked or dropped ([G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
@@ -278,7 +278,7 @@ sequenceDiagram
 3. The planner drafts task groups, tasks, file patterns, dependencies, definitions of done and acceptance criteria.
 4. Go code checks the draft; a failure goes back to the same planner session a bounded number of times.
 5. A passing plan is written to Komodo's home folder, and `komodo plan` prints its path and id and stops.
-6. A person or the orchestrator may edit the plan, then starts it with `komodo run <plan id>`; the checks rerun, and a broken edit is refused.
+6. A person or the orchestrator may edit the plan, then starts it with `komodo run <plan id>`; the checks rerun, and a broken edit is refused. `run <plan id> <group>` with a prompt rewrites that group.
 
 #### 6.4 Errors, Limits and Blocks
 
