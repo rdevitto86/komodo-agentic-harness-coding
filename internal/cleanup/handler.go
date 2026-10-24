@@ -87,6 +87,7 @@ type Handler struct {
 	Report Reporter   // relays a progress fact to the Runtime Manager
 	Errors Errors     // receives removal failures; nil drops them
 	Plans  Blueprints // reads a plan's group labels; nil keeps every plan folder
+	Merged Merger     // tells whether a plan's pull request merged; nil keeps every closed plan folder
 
 	Repo    string                 // repo id the lease registry files the groups under
 	Clone   string                 // path of the clone every git call runs in
@@ -135,7 +136,6 @@ func (h *Handler) Complete(ctx context.Context, p Published) (Report, error) {
 		return rep, fmt.Errorf("close task group %s: %w", p.Group, err)
 	}
 
-	h.closePlan(ctx, p, &rep)
 	h.say(ctx, p.Group, "cleanup.done", rep)
 	return rep, nil
 }

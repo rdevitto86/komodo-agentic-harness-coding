@@ -37,39 +37,20 @@ type PlanGroups interface {
 	PlanGroup(ctx context.Context, plan, label string) (GroupStatus, error)
 }
 
+// Merger tells whether a plan's pull request has merged; the Commit Handler's forge check backs it.
+type Merger interface {
+	// PlanMerged reports whether the pull request of the plan's epic branch has merged.
+	PlanMerged(ctx context.Context, plan string) (bool, error)
+}
+
 // planState is what the group state says about a plan.
 type planState struct {
 	closed  bool // the plan has groups and every one is closed
 	running bool // at least one group is not closed and has state
 }
 
-// closePlan deletes the plan folder of a completed group when every group of its plan is closed.
-func (h *Handler) closePlan(ctx context.Context, p Published, rep *Report) {
-	if p.Plan == "" || h.Roots.Plans == "" || h.Plans == nil {
-		return
-	}
-
-	dir, err := child(h.Roots.Plans, p.Plan)
-	if err != nil {
-		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: p.Plan, Reason: err.Error()})
-		return
-	}
-
-	st, err := h.planState(ctx, p.Plan, p.Label)
-	if err != nil {
-		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: err.Error()})
-		return
-	}
-	if !st.closed {
-		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "a group of the plan is not closed"})
-		return
-	}
-
-	h.deletePlan(dir, rep, false)
-}
-
-// sweepPlans deletes failed drafts, plan folders whose groups are all closed, and plan folders nothing runs in that
-// have not changed for 7 days when stale is set; a folder with a running group is kept.
+// sweepPlans deletes failed drafts, plan folders whose groups are all closed and whose pull request merged, and plan
+// folders nothing runs in that have not changed for 7 days when stale is set; a folder with a running group is kept.
 func (h *Handler) sweepPlans(ctx context.Context, rep *Report, dry, stale bool) {
 	if h.Roots.Plans == "" {
 		return
@@ -105,29 +86,45 @@ func (h *Handler) sweepPlans(ctx context.Context, rep *Report, dry, stale bool) 
 	}
 }
 
-// sweepPlan decides one plan folder: closed plans go, idle plans go when stale is set and they are old, the rest stay.
+// sweepPlan decides one plan folder: closed plans go once their pull request merged, idle plans go when stale is set and
+// they are old, the rest stay.
 func (h *Handler) sweepPlan(ctx context.Context, rep *Report, plan, dir string, dry, stale bool) {
 	var st planState
 	if h.Plans != nil {
 		var err error
-		if st, err = h.planState(ctx, plan, ""); err != nil {
+		if st, err = h.planState(ctx, plan); err != nil {
 			rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: err.Error()})
 			return
 		}
 	}
 
-	switch {
-	case st.running:
+	old := stale && h.now().Sub(planChanged(dir)) >= planStale
+	if st.running {
 		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "a group of the plan is running"})
-	case st.closed || stale && h.now().Sub(planChanged(dir)) >= planStale:
+		return
+	}
+
+	merged := false
+	if st.closed && h.Merged != nil {
+		var err error
+		if merged, err = h.Merged.PlanMerged(ctx, plan); err != nil && !old {
+			rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "check the pull request: " + err.Error()})
+			return
+		}
+	}
+
+	switch {
+	case merged || old:
 		h.deletePlan(dir, rep, dry)
+	case st.closed:
+		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "the plan's pull request has not merged"})
 	default:
 		rep.Kept = append(rep.Kept, Item{Kind: KindPlan, Name: dir, Reason: "the plan changed in the last 7 days"})
 	}
 }
 
-// planState reads the plan's group labels and each group's status; the group labelled extra counts as closed.
-func (h *Handler) planState(ctx context.Context, plan, extra string) (planState, error) {
+// planState reads the plan's group labels and each group's status.
+func (h *Handler) planState(ctx context.Context, plan string) (planState, error) {
 	pg, ok := h.Groups.(PlanGroups)
 	if !ok {
 		return planState{}, errors.New("the group reader cannot tell a plan's group status")
@@ -143,10 +140,6 @@ func (h *Handler) planState(ctx context.Context, plan, extra string) (planState,
 
 	st := planState{closed: len(labels) > 0}
 	for _, l := range labels {
-		if l == extra {
-			continue
-		}
-
 		s, err := pg.PlanGroup(ctx, plan, l)
 		if err != nil {
 			return planState{}, fmt.Errorf("read the status of %s %s: %w", plan, l, err)

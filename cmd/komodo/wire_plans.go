@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cleanup"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/engine"
@@ -19,13 +18,11 @@ import (
 type planSource struct {
 	home   string
 	repoID func(root string) (string, error) // the repository id of a root
-	mu     sync.Mutex
-	facts  map[string]engine.PlanFacts // facts last read per plan, kept after the plan folder is deleted
 }
 
 // newPlanSource returns a plan source over the plan folders of home.
 func newPlanSource(home string, repoID func(root string) (string, error)) *planSource {
-	return &planSource{home: home, repoID: repoID, facts: map[string]engine.PlanFacts{}}
+	return &planSource{home: home, repoID: repoID}
 }
 
 // Specs returns the group specs of the plan for the labels, or every group of the plan when none, in plan order.
@@ -34,8 +31,6 @@ func (p *planSource) Specs(_ context.Context, root, plan string, labels []string
 	if err != nil {
 		return nil, err
 	}
-
-	p.remember(plan, factsOf(bp))
 
 	ids := map[string]string{}
 	for _, g := range bp.Groups {
@@ -77,25 +72,14 @@ func (p *planSource) Specs(_ context.Context, root, plan string, labels []string
 	return out, nil
 }
 
-// Facts returns the plan's goal, release and every group goal; a plan folder the cleanup deleted answers from the facts
-// read while the plan was live.
+// Facts returns the plan's goal, release and every group goal.
 func (p *planSource) Facts(_ context.Context, root, plan string) (engine.PlanFacts, error) {
 	bp, err := p.blueprint(root, plan)
-	if err == nil {
-		f := factsOf(bp)
-		p.remember(plan, f)
-
-		return f, nil
+	if err != nil {
+		return engine.PlanFacts{}, err
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if f, ok := p.facts[plan]; ok {
-		return f, nil
-	}
-
-	return engine.PlanFacts{}, err
+	return factsOf(bp), nil
 }
 
 // blueprint reads the blueprint of a plan of the repository at root.
@@ -111,13 +95,6 @@ func (p *planSource) blueprint(root, plan string) (intake.Blueprint, error) {
 	}
 
 	return bp, nil
-}
-
-// remember keeps the facts of a plan read now.
-func (p *planSource) remember(plan string, f engine.PlanFacts) {
-	p.mu.Lock()
-	p.facts[plan] = f
-	p.mu.Unlock()
 }
 
 // factsOf lists the goal, the release and "<label>: <goal>" for every group of a blueprint.

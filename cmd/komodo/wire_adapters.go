@@ -133,6 +133,14 @@ func (p publishedAdapter) CompleteEpic(ctx context.Context, pub commit.Published
 	return err
 }
 
+// planMerger tells the Cleanup Handler whether a plan's epic pull request merged, through the kit's Commit Handler.
+type planMerger struct{ k *repoKit }
+
+// PlanMerged reports whether the pull request of the plan's epic branch has merged.
+func (m planMerger) PlanMerged(ctx context.Context, plan string) (bool, error) {
+	return m.k.commit.EpicMerged(ctx, commit.EpicPush{Epic: plan})
+}
+
 // noContainers is the container list when Docker is not in use.
 type noContainers struct{}
 

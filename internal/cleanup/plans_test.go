@@ -42,11 +42,23 @@ func (f *fakePlanGroups) PlanGroup(_ context.Context, plan, label string) (Group
 	return f.status[plan+"/"+label], f.err
 }
 
+// fakeMerger reports a plan's pull request as merged when the plan is in the set.
+type fakeMerger struct {
+	merged map[string]bool
+	err    error
+}
+
+// PlanMerged returns the configured answer.
+func (f *fakeMerger) PlanMerged(_ context.Context, plan string) (bool, error) {
+	return f.merged[plan], f.err
+}
+
 // planEnv is a handler wired to a plans folder, fake blueprints and a fixed clock.
 type planEnv struct {
 	*env
 	bp *fakeBlueprints
 	pg *fakePlanGroups
+	mg *fakeMerger
 }
 
 // newPlanEnv adds the plan wiring to a fresh fixture.
@@ -62,7 +74,9 @@ func newPlanEnv(t *testing.T) *planEnv {
 		env: e,
 		bp:  &fakeBlueprints{labels: map[string][]string{}},
 		pg:  &fakePlanGroups{status: map[string]GroupStatus{}},
+		mg:  &fakeMerger{merged: map[string]bool{}},
 	}
+	e.h.Merged = p.mg
 	e.h.Roots = e.roots
 	e.h.Plans = p.bp
 	e.h.Groups = p.pg
@@ -133,17 +147,76 @@ func TestPlanFolders(t *testing.T) {
 		}
 	})
 
-	t.Run("a fresh folder whose groups are all closed is removed", func(t *testing.T) {
+	t.Run("a folder whose groups are all closed and whose pull request merged is removed", func(t *testing.T) {
 		t.Parallel()
 		p := newPlanEnv(t)
 		dir := p.plan("plan-dddddd", 0, "tg-1", "tg-2")
 		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
 		p.pg.status["plan-dddddd/tg-2"] = StatusClosed
+		p.mg.merged["plan-dddddd"] = true
 		if _, err := p.h.Clean(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if exists(dir) {
-			t.Fatal("a closed plan survives the sweep")
+			t.Fatal("a closed, merged plan survives the sweep")
+		}
+	})
+
+	t.Run("a closed plan whose pull request has not merged is kept", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		dir := p.plan("plan-dddddd", 0, "tg-1")
+		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
+		rep, err := p.h.Sweep(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir) || len(rep.Kept) != 1 || rep.Kept[0].Kind != KindPlan {
+			t.Fatalf("unmerged plan removed or not listed: %+v", rep)
+		}
+	})
+
+	t.Run("a merged plan with a running group is kept", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		dir := p.plan("plan-dddddd", 0, "tg-1", "tg-2")
+		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
+		p.pg.status["plan-dddddd/tg-2"] = StatusRunning
+		p.mg.merged["plan-dddddd"] = true
+		if _, err := p.h.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir) {
+			t.Fatal("a plan with a running group was deleted")
+		}
+	})
+
+	t.Run("a merged check error keeps the folder and says why", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		dir := p.plan("plan-dddddd", 0, "tg-1")
+		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
+		p.mg.err = errors.New("forge down")
+		rep, err := p.h.Sweep(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir) || len(rep.Kept) != 1 || rep.Kept[0].Reason == "" {
+			t.Fatalf("folder lost or reason missing: %+v", rep)
+		}
+	})
+
+	t.Run("no merge reader keeps a closed plan", func(t *testing.T) {
+		t.Parallel()
+		p := newPlanEnv(t)
+		p.h.Merged = nil
+		dir := p.plan("plan-dddddd", 0, "tg-1")
+		p.pg.status["plan-dddddd/tg-1"] = StatusClosed
+		if _, err := p.h.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !exists(dir) {
+			t.Fatal("a closed plan went without a merge check")
 		}
 	})
 
@@ -332,6 +405,7 @@ func TestPlanFoldersEngineStart(t *testing.T) {
 		p := newPlanEnv(t)
 		done := p.plan("plan-bbbbbb", 0, "tg-1")
 		p.pg.status["plan-bbbbbb/tg-1"] = StatusClosed
+		p.mg.merged["plan-bbbbbb"] = true
 		failed := filepath.Join(p.roots.Plans, ".plan-failed-ab12")
 		p.write(filepath.Join(failed, "plan.md"), "x")
 		if _, err := p.h.Sweep(ctx); err != nil {
@@ -345,74 +419,29 @@ func TestPlanFoldersEngineStart(t *testing.T) {
 
 func TestCompletePlanFolder(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
-	// complete lands one group of a two-group plan and returns the handler's report.
-	complete := func(t *testing.T, p *planEnv, plan, label string) Report {
-		t.Helper()
-		g := p.addGroup("g1", "komodo/ep-1-g1")
-		p.land(g)
-		pub := p.published(g)
-		pub.Plan, pub.Label = plan, label
-		rep, err := p.h.Complete(ctx, pub)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return rep
-	}
-
-	t.Run("the last group to close removes the plan folder", func(t *testing.T) {
+	t.Run("the last group to close leaves the plan folder for the merge", func(t *testing.T) {
 		t.Parallel()
 		p := newPlanEnv(t)
 		dir := p.plan("plan-aaaaaa", 0, "tg-1", "tg-2")
 		p.pg.status["plan-aaaaaa/tg-1"] = StatusClosed
-		rep := complete(t, p, "plan-aaaaaa", "tg-2")
-		if exists(dir) {
-			t.Fatal("the plan folder survives its last group")
+		p.mg.merged["plan-aaaaaa"] = true
+		g := p.addGroup("g1", "komodo/ep-1-g1")
+		p.land(g)
+		pub := p.published(g)
+		pub.Plan, pub.Label = "plan-aaaaaa", "tg-2"
+		rep, err := p.h.Complete(context.Background(), pub)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if got := rep.Removed[len(rep.Removed)-1]; got != (Item{Kind: KindPlan, Name: dir}) {
-			t.Fatalf("plan not listed last: %+v", rep.Removed)
-		}
-	})
-
-	t.Run("a plan with an open group is kept", func(t *testing.T) {
-		t.Parallel()
-		p := newPlanEnv(t)
-		dir := p.plan("plan-bbbbbb", 0, "tg-1", "tg-2")
-		p.pg.status["plan-bbbbbb/tg-1"] = StatusRunning
-		rep := complete(t, p, "plan-bbbbbb", "tg-2")
-		if !exists(dir) || len(rep.Kept) != 1 || rep.Kept[0].Kind != KindPlan {
-			t.Fatalf("open plan removed or not listed: %+v", rep)
-		}
-	})
-
-	t.Run("a fact without a plan touches no folder", func(t *testing.T) {
-		t.Parallel()
-		p := newPlanEnv(t)
-		dir := p.plan("plan-cccccc", 0, "tg-1")
-		complete(t, p, "", "")
 		if !exists(dir) {
-			t.Fatal("a plan folder went without a plan id")
+			t.Fatal("Complete deleted the plan folder")
 		}
-	})
-
-	t.Run("a plan id that climbs out of the folder is refused", func(t *testing.T) {
-		t.Parallel()
-		p := newPlanEnv(t)
-		rep := complete(t, p, "../shop", "tg-1")
-		if len(rep.Kept) != 1 || rep.Kept[0].Kind != KindPlan {
-			t.Fatalf("bad plan id not refused: %+v", rep)
-		}
-	})
-
-	t.Run("a status read error keeps the folder", func(t *testing.T) {
-		t.Parallel()
-		p := newPlanEnv(t)
-		dir := p.plan("plan-dddddd", 0, "tg-1", "tg-2")
-		p.pg.err = errors.New("state down")
-		rep := complete(t, p, "plan-dddddd", "tg-2")
-		if !exists(dir) || len(rep.Kept) != 1 {
-			t.Fatalf("folder lost or error not listed: %+v", rep)
+		for _, it := range append(rep.Removed, rep.Kept...) {
+			if it.Kind == KindPlan {
+				t.Fatalf("Complete touched the plan: %+v", rep)
+			}
 		}
 	})
 }
+

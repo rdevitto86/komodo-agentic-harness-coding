@@ -375,6 +375,7 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		Task:   &groupRef{},
 		Groups: unfinished{st: k.st, home: s.home, folder: intake.RepoFolder(id)},
 		Plans:  blueprintLabels{home: s.home, folder: intake.RepoFolder(id)},
+		Merged: planMerger{k},
 		Live:   s.leases.Live,
 		Report: reporter{s}, Repo: id, Clone: root, Remote: "origin", Current: version,
 		Roots: cleanup.Roots{

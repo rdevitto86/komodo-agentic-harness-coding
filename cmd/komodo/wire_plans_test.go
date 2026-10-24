@@ -98,7 +98,7 @@ func TestPlanSource(t *testing.T) {
 		}
 	})
 
-	t.Run("Facts names every group of the plan and survives the plan folder", func(t *testing.T) {
+	t.Run("Facts names every group of the plan and reads the folder each time", func(t *testing.T) {
 		t.Parallel()
 
 		home := t.TempDir()
@@ -114,9 +114,8 @@ func TestPlanSource(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err = p.Facts(context.Background(), "/r", "plan-1")
-		if err != nil || !slices.Equal(got.GroupGoals, goals) {
-			t.Fatalf("facts after delete %+v, %v", got, err)
+		if _, err = p.Facts(context.Background(), "/r", "plan-1"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("facts after delete gave %v", err)
 		}
 		if _, err := p.Facts(context.Background(), "/r", "plan-other"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("facts of an unknown plan gave %v", err)
