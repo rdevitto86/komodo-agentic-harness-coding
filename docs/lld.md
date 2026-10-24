@@ -3881,7 +3881,7 @@ The result schema of every agent is generated from its Go result type, so a mode
   blueprint.json    the parsed plan, read by the engine at run start and after a restart
 ```
 
-The folder lives in Komodo's home folder, never in the repository. The Cleanup Handler deletes it once every group in the plan is closed, and `komodo clean` sweeps stale plan folders ([chapter 16](#16-cleanup-handler)).
+The folder lives in Komodo's home folder, never in the repository. The Cleanup Handler deletes it once the plan's pull request has merged, and `komodo clean` sweeps stale plan folders ([chapter 16](#16-cleanup-handler)).
 
 **📐 How the parts of a plan relate**
 ```mermaid
@@ -6580,7 +6580,7 @@ A continue that is accepted returns the group to `Prior`, raises the epoch, ente
 
 1. **Not started.** The group is rewritten in place and then runs.
 2. **Running.** The Runtime Manager stops the group (row 26), its finished tasks are kept, the planner rewrites the remaining tasks from the prompt, and the group continues.
-3. **Done.** The group gets new tasks that build on its landed work, runs, and lands again on the feature branch as one more commit, and the plan's pull request is updated. `Landed` counts each landing of a group, so a rewrite's landing is not skipped as a crash repeat. Once the plan's pull request has merged, a rewrite of any of its groups is refused with a message to write a new plan.
+3. **Done.** The group gets new tasks that build on its landed work, runs, and lands again on the feature branch as one more commit, and the plan's pull request is updated. `Landed` counts each landing of a group, so a rewrite's landing is not skipped as a crash repeat. Once the plan's pull request has merged, a rewrite of any of its groups is refused with a message to write a new plan. Only a group whose outcome is `complete` is reopened; a failed, abandoned or dropped group is refused, and fixing it needs a new plan.
 
 #### Crash recovery and restarting groups
 
@@ -14318,7 +14318,7 @@ The Runtime Manager publishes `run-complete` only after every group of the run h
 
 A sweep runs once each time the engine starts, after the recovery pass has marked which groups can continue, and `komodo clean` calls it on demand. A group that a live lease holds is skipped.
 
-**Plan folders.** `Complete` reads the plan's group labels from its blueprint and each group's status from the group state. When every group in the plan is closed, it deletes the plan's folder under `~/.komodo/plans/<repo-id>/`. A sweep also deletes a plan folder whose groups are all closed, and any `.plan-failed-*` folder. `komodo clean` also deletes a plan folder that no running group uses and whose `plan.md` and `blueprint.json` have not changed for 7 days, and lists each folder it deletes in its reply.
+**Plan folders.** A plan folder stays until the plan's pull request has merged, so the pull request summary and group rewrites can read it. Every sweep, at engine start and in `komodo clean`, deletes the folder of a plan whose groups are all closed and whose pull request `Forge.MergedPR` reports merged, and any `.plan-failed-*` folder; it reads the plan's group labels from its blueprint and each group's status from the group state. `komodo clean` also deletes a plan folder that no running group uses and whose `plan.md` and `blueprint.json` have not changed for 7 days, and lists each folder it deletes in its reply.
 
 1. `Sweep` asks `Groups.Unfinished` and fetches the remote once, without pruning. It collects group ids from the folders in `Roots.Worktrees`, `Roots.QA` and `Roots.Temp` and from `Containers.List`. A group that is unfinished (stopped, blocked, paused or crashed, so `komodo run (id)` can continue it) is kept whole and listed under `kept`.
 2. For each remaining group it takes the Lease Manager's group lock when `Leases` offers one, then reads the lease through `Leases.Holder` and skips a group a live run holds (live when `Handler.Live` says so). Before every removal it reads the lease again and stops that group if a live run has taken it. It removes the group's Docker container, Quality Assurance checkout and session temporary folder.
@@ -14422,7 +14422,7 @@ Component tests use a temporary git repository, a local bare repository as the r
 - A path or group id outside `Roots`, including one reached through a link, is refused with `ErrOutsideRoots` and nothing there is deleted.
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
-- When the last group of a plan closes, `Complete` deletes the plan folder; the folder of a plan with an open group is kept.
+- A plan whose groups are all closed keeps its folder until its pull request has merged; the next sweep then deletes it. The folder of a plan with an open group is kept.
 - `Discard`, reached by `abandon (id)` or by `--deny` on a group blocked on `risky_change`, refuses a group a live run holds, removes the container, drops unpublished work, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
 
 ### 16.10 Open Gaps

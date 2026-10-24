@@ -199,7 +199,7 @@ The Commit Handler publishes approved work: it squashes each approved group onto
 
 #### 5.17 Cleanup Handler
 
-The Cleanup Handler runs after work is pushed. It removes the group's worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. When every group of a plan is closed, it deletes the plan's folder. Detail: [chapter 16](lld.md#16-cleanup-handler).
+The Cleanup Handler runs after work is pushed. It removes the group's worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. Once a plan's pull request has merged, it deletes the plan's folder. Detail: [chapter 16](lld.md#16-cleanup-handler).
 
 #### 5.18 Error Handler
 
