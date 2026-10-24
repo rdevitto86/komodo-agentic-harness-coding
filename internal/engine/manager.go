@@ -95,7 +95,8 @@ type Manager struct {
 	parked   map[string]Timer     // override timers of saved groups no run holds, by group id
 	parkedBy map[string]parkedRow // those groups and their records, by group id
 	expect   map[string]chan error
-	persons  map[string]bool // requests sent from a process with a controlling terminal
+	persons  map[string]bool     // requests sent from a process with a controlling terminal
+	risky    map[string][]string // labels of the risky groups a request's approval landed, by request
 	conts    map[string]chan error
 	beats    map[string]time.Time
 	pool     *Pool
@@ -140,6 +141,7 @@ func New(d Deps) *Manager {
 		parkedBy: map[string]parkedRow{},
 		expect:   map[string]chan error{},
 		persons:  map[string]bool{},
+		risky:    map[string][]string{},
 		conts:    map[string]chan error{},
 		beats:    map[string]time.Time{},
 		chg:      make(chan struct{}),
@@ -312,7 +314,9 @@ func (m *Manager) settle(request string, err error) {
 		m.errs.person()
 	}
 
-	var ev bus.Payload = &bus.RequestAccepted{RequestRef: bus.RequestRef{Request: bus.ID(request)}}
+	risky := m.TakeRisky(request)
+
+	var ev bus.Payload = &bus.RequestAccepted{RequestRef: bus.RequestRef{Request: bus.ID(request)}, Risky: risky}
 	if err != nil {
 		ev = &bus.RequestRefused{RequestRef: bus.RequestRef{Request: bus.ID(request)}, Why: err.Error()}
 	}
@@ -322,6 +326,9 @@ func (m *Manager) settle(request string, err error) {
 	ch := m.expect[request]
 	delete(m.expect, request)
 	m.mu.Unlock()
+	if ch != nil && len(risky) > 0 {
+		m.keepRisky(request, risky) // the waiting verb reads them for its reply
+	}
 	if ch != nil {
 		ch <- err
 	}
@@ -434,9 +441,9 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 			snap := live.snap
 			live.mu.Unlock()
 
-			if snap.Stage != StageDone || !rewritten(rs, s, snap) {
+			if !reopens(rs, s, snap) {
 				forward = append(forward, live)
-				if rewritten(rs, s, snap) {
+				if snap.Stage != StageDone && rewritten(rs, s, snap) {
 					rewrites[s.ID] = s
 				}
 
@@ -460,7 +467,7 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		case errors.Is(err, state.ErrNotFound):
 		case err != nil:
 			return fail("read the saved state of %s: %v", s.Label, err)
-		case rec.State.Stage == StageDone && rewritten(rs, s, rec.State):
+		case reopens(rs, s, rec.State):
 			rewrites[s.ID] = s
 			r.reopen[s.ID] = rec
 		case rec.State.Stage == StageDone:
@@ -468,6 +475,8 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 			r.done[s.ID] = rec.State.Outcome == "complete"
 			if rec.State.Outcome == "failed" {
 				r.failed[s.ID] = true
+			}
+			if rec.State.Outcome == "failed" || rewritten(rs, s, rec.State) {
 				if len(rs.Groups) == 1 && rs.Groups[0] == s.Label {
 					why := s.Label + " failed for good: plan it again to run it fresh"
 					m.publishRefused(id, rs.Target, req, why)
@@ -594,6 +603,12 @@ type EpicMerger interface {
 // the saved state holds.
 func rewritten(rs *bus.RunStart, s GroupSpec, saved State) bool {
 	return slices.Contains(rs.Groups, s.Label) && saved.Stage != NoStage && !sameTasks(saved.Tasks, rewrittenTasks(saved.Tasks, s.Tasks))
+}
+
+// reopens reports whether a run-start reopens a finished group: the group is Done with outcome complete and the start rewrites
+// it. A group that failed, was abandoned or dropped stays as it is.
+func reopens(rs *bus.RunStart, s GroupSpec, saved State) bool {
+	return saved.Stage == StageDone && saved.Outcome == "complete" && rewritten(rs, s, saved)
 }
 
 // sameTasks reports whether two task lists hold the same tasks, each finished or not; a claimed task counts as not finished.

@@ -35,4 +35,15 @@ func TestBulkApproveReplyNamesTheRiskyGroups(t *testing.T) {
 	if err := json.Unmarshal(last.Data, &d); err != nil || !slices.Equal(d.Risky, []string{"tg-1"}) {
 		t.Fatalf("reply data %s names %v, %v", last.Data, d.Risky, err)
 	}
+
+	var got []string
+
+	for _, e := range x.ev.list() {
+		if a, ok := e.Data.(*bus.RequestAccepted); ok && a.Request == "a1" {
+			got = a.Risky
+		}
+	}
+	if !slices.Equal(got, []string{"tg-1"}) {
+		t.Fatalf("request.accepted names %v, want [tg-1]", got)
+	}
 }
