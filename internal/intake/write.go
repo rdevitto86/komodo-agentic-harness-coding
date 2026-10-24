@@ -1,6 +1,8 @@
 package intake
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +15,9 @@ import (
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/core"
 )
 
-// write puts a draft that passed lint on disk and returns what it wrote. It gives the plan an id and each group without
-// one an id, stages plan.md and blueprint.json in a .plan-<random> folder beside the plan folders, then renames the
-// staging folder to the plan id in one move.
+// write puts a draft that passed lint on disk and returns what it wrote. It gives a new plan an id and each new group an id,
+// stages plan.md and blueprint.json in a .plan-<random> folder beside the plan folders, then renames the staging folder to
+// the plan id in one move. A changed plan keeps its id and its groups' ids, and its old folder is renamed aside first.
 func (h *Handler) write(d PlanDraft, pl *planState) (PlanResult, error) {
 	b := d.blueprint()
 	b.Repo = h.d.Repo
@@ -28,15 +30,15 @@ func (h *Handler) write(d PlanDraft, pl *planState) (PlanResult, error) {
 		return PlanResult{}, writeError{fmt.Errorf("create %s: %w", parent, err)}
 	}
 
-	id, err := NewPlanID(func(id string) bool {
-		_, err := os.Lstat(filepath.Join(parent, id))
-		return err == nil
-	})
+	id, err := h.planID(parent, pl)
 	if err != nil {
 		return PlanResult{}, writeError{err}
 	}
 
 	b.Plan = id
+	if pl.stored != nil {
+		keepIDs(&b, *pl.stored)
+	}
 	for i := range b.Groups {
 		if b.Groups[i].ID == "" {
 			b.Groups[i].ID = string(newID())
@@ -68,7 +70,7 @@ func (h *Handler) write(d PlanDraft, pl *planState) (PlanResult, error) {
 	if err := writeBlueprintIn(stage, b); err != nil {
 		return PlanResult{}, writeError{err}
 	}
-	if err := h.rename(stage, filepath.Dir(res.Path)); err != nil {
+	if err := h.place(stage, filepath.Dir(res.Path), pl.stored != nil); err != nil {
 		return PlanResult{}, writeError{fmt.Errorf("move %s into place: %w", id, err)}
 	}
 
@@ -78,6 +80,47 @@ func (h *Handler) write(d PlanDraft, pl *planState) (PlanResult, error) {
 	res.Groups = graph.ordered()
 
 	return res, nil
+}
+
+// planID returns the id of the plan being changed, or a new id no plan folder holds.
+func (h *Handler) planID(parent string, pl *planState) (string, error) {
+	if pl.stored != nil {
+		return pl.stored.Plan, nil
+	}
+
+	return NewPlanID(func(id string) bool {
+		_, err := os.Lstat(filepath.Join(parent, id))
+		return err == nil
+	})
+}
+
+// place moves the staging folder to dir. With replace set, the old dir is renamed aside to .plan-old-<random> first, put
+// back when the move in fails, and removed once the new one is in place.
+func (h *Handler) place(stage, dir string, replace bool) error {
+	if !replace {
+		return h.rename(stage, dir)
+	}
+
+	var raw [6]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Errorf("draw a name for the old folder: %w", err)
+	}
+
+	aside := filepath.Join(filepath.Dir(dir), ".plan-old-"+hex.EncodeToString(raw[:]))
+	if err := h.rename(dir, aside); err != nil {
+		return fmt.Errorf("move the old folder aside: %w", err)
+	}
+	if err := h.rename(stage, dir); err != nil {
+		if back := h.rename(aside, dir); back != nil {
+			return errors.Join(err, fmt.Errorf("restore the old folder: %w", back))
+		}
+
+		return err
+	}
+
+	_ = os.RemoveAll(aside)
+
+	return nil
 }
 
 // osRename renames a file or folder.

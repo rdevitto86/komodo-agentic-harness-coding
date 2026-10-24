@@ -73,16 +73,19 @@ func (e writeError) Unwrap() error { return e.err }
 
 // LintPlan lints a draft for the planner's lint_plan tool, against the tracked files of the plan in progress.
 func (h *Handler) LintPlan(d PlanDraft) []Finding {
-	var tracked []string
+	var (
+		tracked  []string
+		existing Blueprint
+	)
 
 	h.stateMu.Lock()
 	if h.current != nil {
-		tracked = h.current.tracked
+		tracked, existing = h.current.tracked, h.current.existing()
 	}
 
 	h.stateMu.Unlock()
 
-	return LintDraft(d, Blueprint{}, h.protected(), tracked)
+	return LintDraft(d, existing, h.protected(), tracked)
 }
 
 // Plan runs the planner session, lints its draft and writes the plan folder only when lint passes.
@@ -96,8 +99,11 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 	if strings.TrimSpace(r.Goal) == "" && len(r.Docs) == 0 {
 		return PlanResult{}, errors.New("a plan needs a goal, a document or both")
 	}
-	if r.Epic != 0 {
-		return PlanResult{}, errors.New("amending an epic is not supported; plan a new plan")
+	if r.Plan == "" && r.Group != "" {
+		return PlanResult{}, errors.New("a group rewrite needs the plan id of the group")
+	}
+	if r.Plan != "" && strings.TrimSpace(r.Goal) == "" {
+		return PlanResult{}, errors.New("a change to a plan needs a prompt")
 	}
 
 	tree, err := h.d.Tree(ctx)
@@ -113,7 +119,17 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 		return PlanResult{}, writeError{fmt.Errorf("restore interrupted plan: %w", err)}
 	}
 
-	pl := &planState{tracked: tree.Paths()}
+	pl := &planState{tracked: tree.Paths(), group: r.Group}
+	slots := contextmgr.Values{contextmgr.Specs: specs}
+
+	if r.Plan != "" {
+		stored, err := h.loadStored(r)
+		if err != nil {
+			return PlanResult{}, err
+		}
+
+		pl.stored, slots[contextmgr.Plan] = &stored.blueprint, stored.text
+	}
 
 	h.stateMu.Lock()
 	h.current = pl
@@ -127,15 +143,15 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 		defer cancel()
 	}
 
-	goal := strings.TrimSpace(r.Goal)
-	if goal == "" {
-		goal = noGoalText
+	slots[contextmgr.Goal] = strings.TrimSpace(r.Goal)
+	if slots[contextmgr.Goal] == "" {
+		slots[contextmgr.Goal] = noGoalText
+	}
+	if r.Group != "" {
+		slots[contextmgr.Goal] = fmt.Sprintf("Rewrite only the tasks of group %s: %s", r.Group, slots[contextmgr.Goal])
 	}
 
-	c, err := h.d.Context.GetContext(ctx, contextmgr.Request{
-		Agent: "planner", Tree: tree, Chain: h.d.Chain,
-		Slots: contextmgr.Values{contextmgr.Goal: goal, contextmgr.Specs: specs},
-	})
+	c, err := h.d.Context.GetContext(ctx, contextmgr.Request{Agent: "planner", Tree: tree, Chain: h.d.Chain, Slots: slots})
 	if err != nil {
 		return PlanResult{}, fmt.Errorf("build the planner brief: %w", err)
 	}
@@ -167,9 +183,17 @@ func (h *Handler) lintLoop(ctx context.Context, sess PlannerSession, brief strin
 			return PlanResult{}, h.sessionError(ctx, err)
 		}
 
-		found := sortFindings(LintDraft(draft, Blueprint{}, protected, pl.tracked))
+		found := sortFindings(LintDraft(draft, pl.existing(), protected, pl.tracked))
 		if len(failing(found)) == 0 {
-			more, err := base.findings(ctx, draft.blueprint())
+			held, err := h.amendCheck(draft, pl)
+			if err != nil {
+				return PlanResult{}, err
+			}
+
+			found = sortFindings(append(found, held...))
+		}
+		if len(failing(found)) == 0 {
+			more, err := base.findings(ctx, pl.scope(draft.blueprint()))
 			if err != nil && ctx.Err() != nil {
 				return PlanResult{}, h.sessionError(ctx, err)
 			}

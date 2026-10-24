@@ -437,14 +437,6 @@ func TestPlan(t *testing.T) {
 		}
 	})
 
-	t.Run("a request to amend an epic is refused until plans change shape", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(t, twoGroupDraft())
-		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1}); err == nil || r.sess.started != 0 {
-			t.Fatalf("err %v sessions %d", err, r.sess.started)
-		}
-	})
-
 	t.Run("the lint tool gives the findings LintDraft gives", func(t *testing.T) {
 		t.Parallel()
 		var fromTool []Finding

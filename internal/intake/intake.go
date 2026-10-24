@@ -15,9 +15,10 @@ import (
 
 // PlanRequest is the data of a plan event.
 type PlanRequest struct {
-	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
-	Docs []string `json:"docs"` // source documents to plan from, as repository paths
-	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
+	Goal  string   `json:"goal"`  // the one-line goal, or the prompt of a change; may be empty when Docs is set
+	Docs  []string `json:"docs"`  // source documents to plan from, as repository paths
+	Plan  string   `json:"plan"`  // an existing plan id to change; empty for a new plan
+	Group string   `json:"group"` // with Plan, the one group label whose tasks the prompt rewrites
 
 	Repo      string `json:"repo"`       // the repository id the plan belongs to
 	Root      string `json:"root"`       // the repository root on this machine
@@ -206,7 +207,9 @@ func (h *Handler) Handle(ctx context.Context, run bus.ID, req PlanRequest) error
 
 // planState is what lint needs about the plan in progress.
 type planState struct {
-	tracked []string // every tracked file of the base commit
+	tracked []string   // every tracked file of the base commit
+	stored  *Blueprint // the plan being changed; nil for a new plan
+	group   string     // the one group a rewrite may change; empty for a new plan or a shape change
 }
 
 // RegisterEvents binds the plan request, plan written and the five plan error subtypes to their data structs.

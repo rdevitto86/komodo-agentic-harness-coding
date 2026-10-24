@@ -1154,10 +1154,13 @@
             "null"
           ]
         },
-        "epic": {
-          "type": "integer"
-        },
         "goal": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "plan": {
           "type": "string"
         },
         "repo": {
@@ -1170,7 +1173,8 @@
       "required": [
         "goal",
         "docs",
-        "epic",
+        "plan",
+        "group",
         "repo",
         "root",
         "common_dir"
