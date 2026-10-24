@@ -4,12 +4,12 @@ package integration
 
 import (
 	"os"
-	"path"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cli"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 // A new engine's `komodo clean` removes the worktree and container a killed engine left behind.
@@ -21,7 +21,7 @@ func TestCleanSweepsWhatAKilledEngineLeft(t *testing.T) {
 	}
 	r.killEngine()
 	const stray = "0192e4c5-7a10-7d3e-9b2f-0000000009ff"
-	wt := filepath.Join(r.home, "wt", path.Base(cli.RepoID(r.repo)), stray)
+	wt := filepath.Join(r.home, "wt", intake.RepoFolder(cli.RepoID(r.repo)), stray)
 	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
 		t.Fatal(err)
 	}
