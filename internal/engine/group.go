@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/bus"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/lease"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/state"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
@@ -229,7 +229,7 @@ func (g *group) begin() bool {
 
 // worktreeOf returns the group's worktree path.
 func (g *group) worktreeOf() string {
-	return filepath.Join(g.m.d.Home, "wt", path.Base(g.r.start.Repo), g.spec.ID)
+	return filepath.Join(g.m.d.Home, "wt", intake.RepoFolder(g.r.start.Repo), g.spec.ID)
 }
 
 // save writes the new state in one write and keeps the record's revision.

@@ -379,7 +379,8 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 		Live:   s.leases.Live,
 		Report: reporter{s}, Repo: id, Clone: root, Remote: "origin", Current: version,
 		Roots: cleanup.Roots{
-			Worktrees: filepath.Join(s.home, "wt", path.Base(id)),
+			Worktrees: filepath.Join(s.home, "wt", intake.RepoFolder(id)),
+			Legacy:    legacyWorktrees(s.home, id),
 			Landings:  k.landings,
 			Versions:  filepath.Join(s.home, "versions"),
 			Plans:     filepath.Join(s.home, "plans", intake.RepoFolder(id)),
@@ -397,6 +398,16 @@ func (s *stack) kitFor(root, common, id string) (*repoKit, error) {
 	s.byID[id] = k
 	s.spawn(func() { _ = cm.Run(s.ctx) })
 	return k, nil
+}
+
+// legacyWorktrees returns the short-name worktree folder older versions used for the repository, or empty when it is the
+// same folder as the full-name one.
+func legacyWorktrees(home, id string) string {
+	if path.Base(id) == intake.RepoFolder(id) {
+		return ""
+	}
+
+	return filepath.Join(home, "wt", path.Base(id))
 }
 
 // commitSettings reads the commit settings now, so a changed value reaches the Commit Handler's next call.

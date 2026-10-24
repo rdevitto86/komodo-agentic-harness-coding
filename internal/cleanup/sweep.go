@@ -65,6 +65,7 @@ func (h *Handler) sweep(ctx context.Context, dry, stale bool) (Report, error) {
 		h.sweepGroup(ctx, &rep, g, unfinished, dry, fetchErr)
 	}
 
+	h.sweepLegacy(ctx, &rep, unfinished, dry, fetchErr)
 	h.sweepLandings(ctx, &rep, used, dry, fetchErr)
 	h.sweepPlans(ctx, &rep, dry, stale)
 	return rep, nil
@@ -139,7 +140,38 @@ func (h *Handler) sweepGroup(
 	dry bool,
 	fetchErr error,
 ) {
-	path := filepath.Join(h.Roots.Worktrees, group)
+	h.sweepGroupAt(ctx, rep, h.Roots.Worktrees, group, unfinished, dry, fetchErr)
+}
+
+// sweepLegacy removes the worktrees left in the old short-name folder, under the rules of sweepGroup; only the worktree
+// is touched, because the group's container and checkouts are swept by their own name.
+func (h *Handler) sweepLegacy(ctx context.Context, rep *Report, unfinished map[string]bool, dry bool, fetchErr error) {
+	groups, err := folders(h.Roots.Legacy)
+	if err != nil {
+		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: h.Roots.Legacy, Reason: err.Error()})
+		return
+	}
+
+	for _, g := range groups {
+		if ctx.Err() != nil {
+			return
+		}
+		h.sweepGroupAt(ctx, rep, h.Roots.Legacy, g, unfinished, dry, fetchErr)
+	}
+}
+
+// sweepGroupAt is sweepGroup for a group whose worktree sits in root; only the main folder's groups also lose their
+// container and checkouts.
+func (h *Handler) sweepGroupAt(
+	ctx context.Context,
+	rep *Report,
+	root string,
+	group string,
+	unfinished map[string]bool,
+	dry bool,
+	fetchErr error,
+) {
+	path := filepath.Join(root, group)
 	if unfinished[group] {
 		rep.Kept = append(rep.Kept, Item{Kind: KindWorktree, Name: path, Reason: "a run can still continue the group"})
 		return
@@ -172,9 +204,11 @@ func (h *Handler) sweepGroup(
 		guard:    true,
 		noRemote: fetchErr,
 	}
-	r.container()
-	r.checkouts()
-	r.worktree(h.Roots.Worktrees, path, false)
+	if root == h.Roots.Worktrees {
+		r.container()
+		r.checkouts()
+	}
+	r.worktree(root, path, false)
 }
 
 // sweepLandings removes the landing worktree and local branch of every epic that no unfinished group lands on.

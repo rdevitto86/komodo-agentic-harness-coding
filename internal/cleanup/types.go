@@ -56,6 +56,7 @@ type DiscardOptions struct {
 // Roots are the folders the handler may delete inside; it refuses every path outside them.
 type Roots struct {
 	Worktrees string // holds one folder per group, such as ~/.komodo/wt/<repo-id>
+	Legacy    string // the old short-name worktree folder; a sweep removes its idle worktrees; empty means none
 	Landings  string // holds one landing worktree per epic
 	QA        string // holds one Quality Assurance checkout per group; empty means none exist
 	Temp      string // holds one session temporary folder per group; empty means none exist
