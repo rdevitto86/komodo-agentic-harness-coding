@@ -3876,6 +3876,7 @@ classDiagram
   class Plan["plan.md header"] {
     id
     goal
+    release
     source documents
   }
   class TG["## tg-N group"] {
@@ -3906,6 +3907,7 @@ A group's label (`tg-1`, `tg-2`) is numbered inside the plan, and another group'
 # Plan
 id: plan-7f3a9c
 goal: Add lease revocation
+release: V1
 sources:
 - docs/hld.md
 - docs/lld.md
@@ -3937,6 +3939,7 @@ Add the stale check to the fence: a write whose fence is below the lease's is re
 |---|---|---|
 | `id:` | string | The plan id, written by Komodo when the plan is saved; a draft leaves it out; `plan-` and 6 random lowercase hexadecimal characters, drawn again when the id already exists in the repository |
 | `goal:` | string | One line: what the plan delivers |
+| `release:` | string | The release the plan delivers: the scoped product requirements and design version it names, such as `V1`; the plan's changelog fragment is filed under it |
 | `sources:` | list | The repository paths of the source documents the plan was made from |
 
 A group is a `## tg-N` section and a task a `### tsk-*` section inside it. The group fields follow.
@@ -3983,6 +3986,7 @@ Grammar of `plan.md`:
 - **Lists:** a one-line value is a list of one; several values are `- ` lines under the key, as `files:` shows.
 - **Acceptance criteria:** `- ` lines after a task's card, in one of three shapes: `WHEN <event> THE SYSTEM SHALL <response>`, `IF <condition> THEN THE SYSTEM SHALL <response>` or `WHILE <state> THE SYSTEM SHALL <response>`. An indented `cmd:` or `needs:` line belongs to the item above it.
 - **Numbers:** groups are numbered `tg-1`, `tg-2` in order inside the plan; a number has no leading zero.
+- **Release line:** a plan without a `release:` line [TODO: what lint does for a plan with no `release:` line ([G-337](#g-337))].
 - **Unknown key:** a `grammar` finding names the key, so a file from a newer grammar is refused, never half read. A missing optional key reads as its default: `subsystem` `none`, `touches` empty, `priority` `normal`. A missing `id`, `goal` or `points` is a `grammar` finding; a missing or empty `files`, a missing `dependencies` key (a group with none writes the key with no value) and a task without `files`, or with neither a `done_when` nor an acceptance criterion, are `required` findings.
 
 #### Go types
@@ -4001,6 +4005,7 @@ type Blueprint struct {
 	Plan    string   `json:"plan"`    // the plan id
 	Repo    string   `json:"repo"`    // the repository id the plan belongs to
 	Goal    string   `json:"goal"`    // one-line goal of the plan
+	Release string   `json:"release"` // the release the plan delivers, such as V1
 	Sources []string `json:"sources"` // repository paths of the source documents
 	Groups  []Group  `json:"groups"`  // in plan order
 }
@@ -4591,6 +4596,7 @@ Fixed constants, not settings:
 
 #### Unit
 
+- A fixture `plan.md` with `release: V1` parses to a `Blueprint` whose `Release` is `V1`, and `Parse` then `Lint` gives the same value from a stored `blueprint.json`.
 - A fixture `plan.md` passes `Lint` with 0 failing findings, and `Parse` then `Lint` over a stored `blueprint.json` gives the same findings.
 - A task with neither a `done_when` nor an acceptance criterion fails lint, rule `required`; a task with only one of the two passes.
 - Two groups in one wave sharing a file fail lint, rule `wave_isolation`.
@@ -4626,7 +4632,11 @@ These use a mock model client that returns scripted drafts, and a fake bus.
 
 ### 5.10 Open Gaps
 
-No open gaps.
+Each id is a row in the [gap register](#appendix-b-gap-register); the rows are not copied here.
+
+| Gap | Question | Used in |
+|---|---|---|
+| [G-337](#g-337) | What lint does for a plan with no `release:` line | 5.3 |
 
 ## 6. Context Manager
 
@@ -6597,6 +6607,7 @@ A Task Manager sends `timer.extend` when a session nears its wall limit and its 
 4. When every group is Done, the Runtime Manager publishes `run-complete` / `done`; a group blocked on `risky_change` is listed by the stall rule below.
 5. When no group can run and at least one is Blocked, it publishes `run-failure` / `stalled`, listing each blocked group and its reason; the Error Handler and the CLI show it to the caller.
 6. `komodo abandon (plan id) (group label)` drops a group for good: the Runtime Manager stops the group, the group is Done with outcome `abandoned` (row 20), the Cleanup Handler's `Discard` frees its resources, and each dependent blocks with `dependency`.
+7. `komodo run (plan id) (group label) --deny` on a group blocked on `risky_change` ends the group the same way (row 25): the Runtime Manager makes the stage-move, the Cleanup Handler's `Discard` frees its resources and each dependent blocks with `dependency`, naming it. A person rewrites a dependent with `komodo run (plan id) (group label) "(prompt)"` or abandons it.
 
 #### Landing on an epic's branch
 
@@ -6686,7 +6697,7 @@ type Transition struct {
 | 22 | Blocked on `retries` | `timer.due` reason `override_lapse` | `Block.Until` reached | Done | `Outcome` failed; orders `cancel` and `release`; emits `override.lapsed`, `group.failed`, `group.done`; the history stays and the Cleanup Handler may free the worktree and caches |
 | 23 | Test and Review | `stage.done` | The same approvals, and the level is `high` or `critical` | Blocked | `Prior` = stage; `Block.Reason` `risky_change` with the question "land this risky change?"; emits `group.blocked` |
 | 24 | Blocked on `risky_change` | `continue` with `Answer` approve | | Commit | Epoch + 1; orders `enter_stage` Commit; emits `group.resumed`, `stage.enter` |
-| 25 | Blocked on `risky_change` | `continue` with `Answer` deny | | Done | The group is dropped [TODO: the outcome recorded, what its dependents do and what the Cleanup Handler frees ([G-332](#g-332))]; emits `group.done` |
+| 25 | Blocked on `risky_change` | `continue` with `Answer` deny | | Done | The group is recorded as dropped [TODO: the `Outcome` value a dropped group carries ([G-335](#g-335))]; it frees what `abandon` frees (row 20); dependents block `dependency`, naming it; emits `group.done` |
 | 26 | Any working stage | `rewrite` | A prompt rewrites the group ([5.5](#55-behaviour)) | Build | The Runtime Manager stops the group; its finished tasks are kept; the planner rewrites the remaining tasks; the group continues; Epoch + 1; emits `group.resumed`, `stage.enter` |
 
 #### The retry budget
@@ -6979,6 +6990,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 |---|---|---|
 | [G-07](#g-07) | The real Max five-hour window against 3 sessions on one subscription link | Ledger measurement over the first 20 groups |
 | [G-308](#g-308) | The epic pull request while a risky group is blocked or dropped | Owner decision |
+| [G-335](#g-335) | The `Outcome` value of a dropped group | Owner decision |
 ## 8. Cache Manager
 
 The Cache Manager is the local cache for pieces of context and for prompt-cache markers. It keeps what is expensive to rebuild so the harness does not pay for it twice: pieces of context, and the plan that tells the model client which parts of a prompt the provider may remember. It never stores a model's answer, so a model call is always a real call. Every entry is found by a fingerprint of its inputs, so an entry is either exactly right or absent. The purpose of the subsystem and who it talks to are in [HLD 5.9](hld.md#59-cache-manager).
@@ -13167,7 +13179,7 @@ What lies beside it:
 - Quality Assurance and the Reviewer judge the work; the Commit Handler never re-judges it.
 - The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
 - The Task Manager creates each group's detached worktree and calls `Save` after each finished task; the Cleanup Handler removes them ([chapter 16](#16-cleanup-handler)).
-- The Commit Handler commits no plan: plans live outside the repository. The plan's pull request carries a high-level summary of the plan, all the changes and a changelog reference. [TODO: how a lasting record of task groups, such as a changelog anchor, is kept ([G-323](#g-323))]
+- The Commit Handler commits no plan: plans live outside the repository. The plan's pull request carries a high-level summary of the plan, all the changes and a link to the plan's changelog fragment. The plan header names the release the plan delivers (`release:`, [5.3](#53-data-model)); when the plan's pull request is opened, the Commit Handler adds one fragment file to the feature branch holding the plan's summary under that release. `make release` folds the fragments into the changelog, which has no unreleased section. [TODO: the changelog fragment's folder and file name, and how the fragment reaches the remote ([G-336](#g-336))]
 - No command reaches the Commit Handler. `komodo run (id)` continues a group, and only a group with the approvals its level requires publishes; `replay` changes nothing.
 
 ### 15.2 Package Layout
@@ -13304,7 +13316,7 @@ type PRFacts struct {
 }
 ```
 
-The group template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `QA` and `Reviewer`; no model writes any of its words. `RenderBody` renders one group's section, which the landing keeps in the group's merge commit message, and `RenderEpicBody` renders the plan's pull request body from the plan summary, the sections of every landed group and the changelog reference. The plan's pull request body holds a high-level summary of the plan, which is the plan's goal and each group's goal, then all the changes, then a changelog reference [TODO: how the changelog is anchored ([G-323](#g-323))]. No task name appears in the body or in a squash message.
+The group template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `QA` and `Reviewer`; no model writes any of its words. `RenderBody` renders one group's section, which the landing keeps in the group's merge commit message, and `RenderEpicBody` renders the plan's pull request body from the plan summary, the sections of every landed group and the changelog reference. The plan's pull request body holds a high-level summary of the plan, which is the plan's goal and each group's goal, then all the changes, then a link to the plan's changelog fragment [TODO: the changelog fragment's folder and file name, and how the fragment reaches the remote ([G-336](#g-336))]. No task name appears in the body or in a squash message.
 
 ```go
 // bodyTemplate is one group's section of the pull request body; every value comes from the facts and the two verdicts.
@@ -13329,7 +13341,7 @@ type EpicFacts struct {
 	GroupGoals []string `json:"group_goals"` // one line per group of the plan, as "<label>: <goal>"
 	DiffStat   string   `json:"diff_stat"`   // git's diff stat of the feature branch against the base branch
 	Groups     []string `json:"groups"`      // one section per landed group, in landing order, as RenderBody wrote it
-	Changelog  string   `json:"changelog"`   // the changelog reference [TODO: how the changelog is anchored ([G-323](#g-323))]
+	Changelog  string   `json:"changelog"`   // the link to the plan's changelog fragment
 }
 
 // epicBodyTemplate is the plan's pull request body; every value comes from EpicFacts.
@@ -13687,7 +13699,7 @@ flowchart TB
 5. The landing squashes, as the epic landing steps below describe, and never rebases. The worktree's commits squash into the epic branch by the commit id verified in step 3 and after the sync, never by a branch name. A conflict is `ErrConflict` and frees the turn with `Release`.
 6. `Check.Recheck` runs on the local epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`; the check result decides, so a failed `epic.paused` report is added to the error and does not change its kind.
 7. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last and `Result.Last` is true. `Publish` pushes nothing; the push is `PushEpic` (below).
-8. `PushEpic` takes the epic's turn with `Epics.Lock`, fetches the remote epic branch and merges it in, fetches the base branch, and lists the landings. With no landing it returns. Otherwise it reads `RemoteTip`, skips the push when the remote already holds the local tip, pushes the epic branch once, and fails unless the remote then holds the local tip. When every group has landed, `Done` names every group and the epic is not paused, `Forge.FindPR` looks for a pull request on the epic branch: if none exists, `OpenPR` opens one; if one exists and the push changed the branch, `UpdatePR` refreshes its body from `RenderEpicBody`. After that, when the epic is last and has a pull request, it calls `Cleaner.CompleteEpic`; a cleanup error goes into `EpicResult.CleanupError` and fails nothing. [TODO: when the epic's last landing is reached while a risky group is blocked or dropped, and whether landing it later pushes again ([G-308](#g-308))]
+8. `PushEpic` takes the epic's turn with `Epics.Lock`, fetches the remote epic branch and merges it in, fetches the base branch, and lists the landings. With no landing it returns. Otherwise it reads `RemoteTip`, skips the push when the remote already holds the local tip, pushes the epic branch once, and fails unless the remote then holds the local tip. When every group has landed, `Done` names every group and the epic is not paused, `Forge.FindPR` looks for a pull request on the epic branch: if none exists, `OpenPR` opens one, after the Commit Handler adds the plan's changelog fragment file to the epic branch, holding the plan's summary under the plan's `release:`, so the body links to it [TODO: the changelog fragment's folder and file name, and how the fragment reaches the remote ([G-336](#g-336))]; if one exists and the push changed the branch, `UpdatePR` refreshes its body from `RenderEpicBody`. After that, when the epic is last and has a pull request, it calls `Cleaner.CompleteEpic`; a cleanup error goes into `EpicResult.CleanupError` and fails nothing. [TODO: when the epic's last landing is reached while a risky group is blocked or dropped, and whether landing it later pushes again ([G-308](#g-308))]
 9. `Report` sends `publish.done` with a `Result`. The Runtime Manager publishes `epic.pushed` after each `PushEpic` and `pr.opened` when `EpicResult.PRURL` is set ([7.5](#75-behaviour)). A person or the orchestrator waiting on a run wakes on `pr.opened`.
 10. `Publish` calls `Cleaner.Complete` with the worktree's tip, the commit that holds the group's work (`landed`) and the local epic branch (`into`); the remote is not consulted. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. The Cleanup Handler removes the worktree under the rule in [16.5](#165-behaviour).
 
@@ -13747,15 +13759,15 @@ A group whose risk level is `high` or `critical` waits for approval before it la
 
 1. After the group passes its checks, the Runtime Manager blocks it with reason `risky_change` and the question "land this risky change?" ([7.5](#75-behaviour)). The Commit Handler is not called, and nothing is committed, pushed or opened.
 2. `komodo run <plan id> <group> --approve` lands the group: it enters the Commit stage and `Publish` lands it on the epic branch like any other group.
-3. `komodo run <plan id> <group> --deny` drops the group. [TODO: the outcome recorded for a dropped risky group, what its dependents do and what the Cleanup Handler frees ([G-332](#g-332))]
-4. Groups that depend on the risky group wait; every other group carries on.
+3. `komodo run <plan id> <group> --deny` drops the group, the same as `abandon`: the group is recorded as dropped, its worktree, sandbox and lease are freed through `Discard` ([16.5](#165-behaviour)), and its saved state and event log stay. [TODO: the `Outcome` value a dropped group carries ([G-335](#g-335))] Groups that depend on it block with the reason `dependency`, naming it. A person rewrites a dependent with `komodo run <plan id> <group> "<prompt>"` or abandons it.
+4. Every group that does not depend on the risky group carries on.
 5. `komodo run <plan id> --approve`, which answers every blocked group, also lands the `high` and `critical` groups; one command lands all of them, and the reply names which groups were `high` or `critical`.
 
 #### Pull request shapes
 
 | Case | Branch pushed | Pull request | Opened |
 |---|---|---|---|
-| Epic | `komodo/<epic>`, once | Ready, into the base branch; the plan summary, all changes and the changelog reference; a person merges | After the epic's last landing |
+| Epic | `komodo/<epic>`, once | Ready, into the base branch; the plan summary, all changes and a link to the changelog fragment; a person merges | After the epic's last landing |
 
 #### Push budget
 
@@ -13868,8 +13880,10 @@ Component tests use a local bare repository as the remote and a mock `gh` that r
 - A `critical` group that passes its checks is blocked with the question "land this risky change?", lands nothing on the epic branch, opens no pull request and pushes nothing.
 - `komodo run <plan id> <group> --approve` on that group lands it on the epic branch as one commit.
 - `komodo run <plan id> <group> --deny` on that group drops it and lands nothing.
+- After `--deny` on a group blocked on `risky_change`, `Discard` has freed its worktree, sandbox and lease, its saved state and event log remain, and a group that depends on it is blocked with the reason `dependency`, naming it.
 - Two blocked groups, one `critical`: one `komodo run <plan id> --approve` lands both, and the reply names the `critical` one.
 - The epic's pull request is titled `<epic label>: <N> task groups`.
+- When the pull request is opened, the epic branch gains one fragment file holding the plan's summary under the plan's `release:`, and the pull request body links to it.
 - A second `Publish` with the same approval opens no second pull request and calls `Complete` again.
 - A crash simulated between push and pull request opens the pull request on the repeat.
 - A worktree whose `.git` pointer file names another folder is ignored: the commit lands in the group's own git folder.
@@ -13882,8 +13896,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Used in |
 |---|---|---|
 | [G-308](#g-308) | The epic pull request while a risky group is blocked or dropped | 15.5 |
-| [G-323](#g-323) | How the changelog is anchored | 15.1, 15.3 |
-| [G-332](#g-332) | What a dropped risky group leaves behind | 15.5 |
+| [G-335](#g-335) | The `Outcome` value of a dropped group | 15.5 |
+| [G-336](#g-336) | The changelog fragment's folder, file name and how it reaches the remote | 15.1, 15.5 |
 
 ## 16. Cleanup Handler
 
@@ -13907,7 +13921,7 @@ Three entry points exist, each a method of `Handler`:
 |---|---|---|
 | `Complete` | Commit Handler | One published group, in full |
 | `Sweep` | The engine at each start, after the recovery pass; `komodo clean` | Remains of stopped or crashed runs |
-| `Discard` | The Runtime Manager, for `komodo abandon (id)` | One named group dropped for good |
+| `Discard` | The Runtime Manager, for `komodo abandon (id)` and for `--deny` on a group blocked on `risky_change` | One named group dropped for good |
 
 What the Cleanup Handler guarantees:
 - It never removes a worktree that holds files the published tip lacks; it keeps the worktree and lists it under `kept`.
@@ -13919,7 +13933,7 @@ What lies beside it:
 - The Cleanup Handler removes the group's worktree and Docker container itself. The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
 - The Task Manager owns the sandbox and the group's closing; the Cleanup Handler calls only its `CloseTaskGroup()`, and the Task Manager destroys the sandbox inside it.
 - `komodo clean` removes everything that belongs to no open run, and any caller may run it, including the orchestrator. The worktrees and containers go through `Sweep` and obey the guarantees above; the caches, event logs and metrics records belong to the Cache Manager, the Event Bus and the Metrics Service, which the Runtime Manager asks ([7.5](#75-behaviour)).
-- `komodo abandon (id)` drops a group for good through `Discard`.
+- `komodo abandon (id)` and `komodo run (plan id) (group label) --deny` on a group blocked on `risky_change` drop a group for good through `Discard`.
 - Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), and a group has no branch, so cleanup removes only the group's worktree and container; 16.5 lists the branches that go.
 
 ### 16.2 Package Layout
@@ -14171,7 +14185,7 @@ An error from `RemoveWorktree`, `DeleteBranch` or `DiscardWorktree` that carries
 | Commit Handler | `Complete` | A group's landing is pushed, and the epic's pull request step is done when it was the last group |
 | Runtime Manager | `Sweep` | Once each time the engine starts, after the recovery pass has marked which groups can continue |
 | Runtime Manager | `Sweep`, `Preview`, `UnusedVersions` | The engine's `clean` request from `komodo clean`; with `--dry-run` it calls `Preview` and the Report lists what would go |
-| Runtime Manager | `Discard` | `komodo abandon (id)`, after it stops the group |
+| Runtime Manager | `Discard` | `komodo abandon (id)`, or `--deny` on a group blocked on `risky_change`, after it stops the group |
 | Runtime Manager | `UnusedVersions` | The engine's `clean` request from `komodo update`, before it deletes old versions |
 
 | Error | Means | Caller does |
@@ -14232,7 +14246,7 @@ A crash or `stop` leaves the group's worktree, branch and container in place. `k
 
 #### Discarding one group
 
-`komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first.
+`komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first; `--deny` on a group blocked on `risky_change` reaches it the same way.
 
 1. `Discard` takes the Lease Manager's group lock when `Leases` offers one and refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first. It reads the lease again before every removal, and a live holder stops it with `ErrLeaseHeld`.
 2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too and drops unpublished work; a link in its place is unlinked, not followed. It then calls `CloseTaskGroup()`, which destroys the sandbox.
@@ -14322,7 +14336,7 @@ Component tests use a temporary git repository, a local bare repository as the r
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
 - When the last group of a plan closes, `Complete` deletes the plan folder; the folder of a plan with an open group is kept.
-- `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, drops unpublished work, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
+- `Discard`, reached by `abandon (id)` or by `--deny` on a group blocked on `risky_change`, refuses a group a live run holds, removes the container, drops unpublished work, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
 
 ### 16.10 Open Gaps
 
@@ -16172,10 +16186,11 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-314"></a>G-314 | Risk levels | Deferred until the CICD runner is refined. Whether `cicd.yaml` and compose files count as `critical`, and whether the path tables of 14.3 hold, including migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` | Deferred, until the CICD runner is refined | [14](#14-reviewer) |
 | <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`); the risk rules name it, but no caller sets it. Public interface detection is built: a line scan of the diff for changes to exported Go declarations | After the trial runs | [14](#14-reviewer) |
 | <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
-| <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
-| <a id="g-332"></a>G-332 | Dropped risky group | `komodo run <plan id> <group> --deny` on a high or critical group drops it. Open: the outcome recorded for the dropped group, what its dependents do, and what the Cleanup Handler frees | Owner decision | [15](#15-commit-handler), [7](#7-runtime-manager) |
 | <a id="g-333"></a>G-333 | Prompt injection | Text an agent reads can carry instructions meant to hijack it: repository files, the documents and prompts the planner reads, test and tool output, and outside tool servers. No part of the design treats that text as data rather than instructions, and the Reviewer's `security` lens covers injection in code, not attacks on agents. Open: how each agent's brief marks untrusted text, which actions need a check before they run, and how an attempt is detected and reported | Owner decision | [6](#6-context-manager), [11](#11-task-manager), [14](#14-reviewer) |
 | <a id="g-334"></a>G-334 | Agent evaluations | Nothing re-tests the agents when a prompt, skill or model changes; golden files cover only the Output Formatter's text, and the per-agent scorecard looks back 30 days. Open: a fixed set of sample plans and groups, run before a release, whose pass rate, cost and time are compared with the last release | Owner decision | [18](#18-metrics-service) |
+| <a id="g-335"></a>G-335 | Dropped group outcome | `komodo run <plan id> <group> --deny` on a group blocked on `risky_change` records the group as dropped. Open: the `Outcome` value the group's record carries | Owner decision | [7](#7-runtime-manager), [15](#15-commit-handler) |
+| <a id="g-336"></a>G-336 | Changelog fragment location | The Commit Handler adds one fragment file to the feature branch when the plan's pull request is opened. Open: the fragment's folder and file name, and how the file reaches the remote | Owner decision | [15](#15-commit-handler) |
+| <a id="g-337"></a>G-337 | Plan without a release | The plan header names the release with `release:`. Open: what lint does for a plan with no `release:` line | Owner decision | [5](#5-intake-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

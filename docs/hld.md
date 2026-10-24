@@ -198,7 +198,7 @@ The Reviewer is the final code check of the group's own changes, skipped at `low
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and the changelog reference. A high or critical group blocks after it passes its checks with the question "land this risky change?": approving lands it on the feature branch and denying drops it, groups that depend on it wait, and other groups carry on. One `komodo run <plan id> --approve` answers every blocked group, including these. [TODO: epic pull request details while a risky group is blocked or dropped ([G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and a link to the plan's changelog fragment, a file it adds to the feature branch under the release the plan header names. A high or critical group blocks after it passes its checks with the question "land this risky change?": approving lands it on the feature branch and denying drops it as `abandon` does, groups that depend on it block with the reason `dependency` and other groups carry on. One `komodo run <plan id> --approve` answers every blocked group, including these. [TODO: epic pull request details while a risky group is blocked or dropped ([G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
