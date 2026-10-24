@@ -128,7 +128,7 @@ function figures(f) {
 function runCard(r) {
   const card = el("article", {class: "card run", tabindex: "0", role: "button", "aria-haspopup": "dialog", "data-run": r.run_id,
       "aria-label": "Open run " + (r.plan || r.target)},
-    html("header", "", html("div", "", html("h3", "", r.target), html("span", "gid", (r.plan ? "" : "run ") + r.run_id)), figures(r.figures)),
+    html("header", "", html("div", "", html("h3", "", r.target), html("span", "gid", "run " + r.run_id)), figures(r.figures)),
     html("div", "groups", r.groups.map(groupCard)));
   card.addEventListener("click", () => openRun(r.run_id));
   card.addEventListener("keydown", (ev) => {
