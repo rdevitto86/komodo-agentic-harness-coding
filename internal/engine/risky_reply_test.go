@@ -38,11 +38,17 @@ func TestBulkApproveReplyNamesTheRiskyGroups(t *testing.T) {
 
 	var got []string
 
-	for _, e := range x.ev.list() {
-		if a, ok := e.Data.(*bus.RequestAccepted); ok && a.Request == "a1" {
-			got = a.Risky
+	// The event bus delivers to the log after the reply is sent.
+	waitUntil(t, "the request.accepted event", func() bool {
+		for _, e := range x.ev.list() {
+			if a, ok := e.Data.(*bus.RequestAccepted); ok && a.Request == "a1" {
+				got = a.Risky
+				return true
+			}
 		}
-	}
+
+		return false
+	})
 	if !slices.Equal(got, []string{"tg-1"}) {
 		t.Fatalf("request.accepted names %v, want [tg-1]", got)
 	}

@@ -24,8 +24,10 @@ type fakeProvider struct {
 func (f *fakeProvider) Link() llm.Link { return f.link }
 
 func (f *fakeProvider) Probe(context.Context) (llm.ProbeResult, error) {
-	f.probe.Link = f.link
-	return f.probe, f.perr
+	p := f.probe
+	p.Link = f.link
+
+	return p, f.perr
 }
 
 func (f *fakeProvider) Profile(context.Context, llm.Weight) (llm.CapacityProfile, error) {

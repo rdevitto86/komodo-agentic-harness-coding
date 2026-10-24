@@ -190,8 +190,16 @@ func TestPauseCommandLetsTheSessionFinishThenHoldsUntilWake(t *testing.T) {
 func TestQALimitedMidRoundIsOwedAtTheTimerAndTheReviewerIsNotRerun(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
-	r.model.on("qa", limitStep(t0.Add(time.Hour)), sayResult(qaPass))
-	r.model.on("reviewer", sayResult(reviewerMet))
+	// The limit lands only once the reviewer has started, since a link recorded as limited holds back a session not yet begun.
+	reviewing := make(chan struct{})
+	r.model.on("qa", func(s llm.Session) (llm.Stream, error) {
+		<-reviewing
+		return limitStep(t0.Add(time.Hour))(s)
+	}, sayResult(qaPass))
+	r.model.on("reviewer", func(s llm.Session) (llm.Stream, error) {
+		close(reviewing)
+		return sayResult(reviewerMet)(s)
+	})
 	if err := r.run(); !errors.Is(err, ErrGroupPaused) {
 		t.Fatalf("Run returned %v", err)
 	}

@@ -497,7 +497,7 @@ func (r *pipeRig) reachCleanupWith(call func(context.Context) error) {
 	done := make(chan error, 1)
 	go func() { done <- call(context.Background()) }()
 	deadline := time.After(10 * time.Second)
-	for r.m.Progress().Stage != state.StageCleanup {
+	for r.m.Progress().Stage != state.StageCleanup || !slices.Contains(r.rt.stagesSeen(), state.StageCleanup) {
 		select {
 		case err := <-done:
 			r.t.Fatalf("the call ended before cleanup: %v (stages %v)", err, r.rt.stagesSeen())
