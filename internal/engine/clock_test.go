@@ -46,6 +46,20 @@ func (c *FakeClock) Pending() int {
 	return n
 }
 
+// armedIn reports whether a timer waits to fire exactly d from now.
+func (c *FakeClock) armedIn(d time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, t := range c.timers {
+		if !t.done && t.at.Equal(c.now.Add(d)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Advance moves the clock and fires every timer that came due, in time order.
 func (c *FakeClock) Advance(d time.Duration) {
 	c.mu.Lock()

@@ -227,9 +227,11 @@ func TestSecondEngineExitsAndALeftoverSocketFileIsReplaced(t *testing.T) {
 	y := &eng{rig: x.rig, sock: sock, served: make(chan error, 1)}
 	y.e = NewEngine(x.d, sock)
 	y.serve()
-	if info, err := os.Stat(sock); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("socket mode %v err %v", info, err)
-	}
+	// The engine narrows the mode right after it listens, so a dial can land first.
+	until(t, "the socket mode to be 0600", func() bool {
+		info, err := os.Stat(sock)
+		return err == nil && info.Mode().Perm() == 0o600
+	})
 }
 
 func TestDialWithNoEngineReturnsErrNoEngine(t *testing.T) {

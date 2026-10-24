@@ -221,6 +221,8 @@ func TestASetupBlockerWaitsOneTwoThenFourMinutesAndTheFourthIsAStall(t *testing.
 			return r.ev.count(bus.TypeRunStatus, "error.recorded") == n+1 && r.streakOf("tg-1") == n+1
 		})
 
+		// The group saves and reports the error before it arms the wait, so the clock moves only once the wait is armed.
+		until(t, "the wait to be armed", func() bool { return r.clock.armedIn(wait) })
 		r.clock.Advance(wait - time.Second)
 		time.Sleep(60 * time.Millisecond)
 
