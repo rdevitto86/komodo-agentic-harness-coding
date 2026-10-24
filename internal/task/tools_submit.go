@@ -92,14 +92,14 @@ func toolSkill(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	return Reply{Text: text}
 }
 
-// toolLintBacklog returns the lint errors of a planned task list, or ok.
-func toolLintBacklog(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
+// toolLintPlan returns the lint errors of a plan text, or ok.
+func toolLintPlan(_ context.Context, tc *toolCall, raw json.RawMessage) Reply {
 	var a lintArgs
 	if err := decode(raw, &a); err != nil {
 		return bad(err)
 	}
 	if tc.env.Lint == nil {
-		return errReply("lint_backlog is not available in this session")
+		return errReply("lint_plan is not available in this session")
 	}
 	if errs := tc.env.Lint(a.Draft); len(errs) > 0 {
 		return Reply{Text: strings.Join(errs, "\n")}

@@ -30,7 +30,7 @@ const (
 	Specs        Slot = "specs"
 	Goal         Slot = "goal"
 	Layout       Slot = "layout"
-	Backlog      Slot = "backlog"
+	Plan         Slot = "plan"
 	SlotRepoMap  Slot = "repo_map"
 	Baseline     Slot = "baseline"
 	Acceptance   Slot = "acceptance"
@@ -87,7 +87,7 @@ var (
 	slotTable = map[string]slotRow{
 		"planner": {
 			required: []Slot{RepoProfile, SlotRepoMap, Layout, Goal},
-			optional: []Slot{RepoContext, Specs, Backlog},
+			optional: []Slot{RepoContext, Specs, Plan},
 		},
 		"builder": {
 			required: []Slot{RepoProfile, Group, Tasks, Files, FileContents},

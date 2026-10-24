@@ -43,7 +43,7 @@ var (
 		Specs:        true,
 		Goal:         true,
 		Layout:       true,
-		Backlog:      true,
+		Plan:         true,
 		SlotRepoMap:  true,
 		Baseline:     true,
 		Acceptance:   true,

@@ -566,7 +566,7 @@ func (f *fakeModel) messages(w http.ResponseWriter, raw []byte) {
 	}
 	role := "reviewer"
 	switch {
-	case tools["lint_backlog"]:
+	case tools["lint_plan"]:
 		role = "planner"
 	case tools["write"] || tools["edit"]:
 		role = "builder"

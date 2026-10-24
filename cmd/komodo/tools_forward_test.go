@@ -106,7 +106,7 @@ func newToolEngine(t *testing.T) *toolEngine {
 
 	tools := []string{
 		"read", "search", "edit", "write", "run", "diff", "git_read", "skill", "submit_finding", "task_done",
-		"lint_backlog",
+		"lint_plan",
 	}
 	perm := task.Permissions{
 		Tools:      tools,
@@ -265,7 +265,7 @@ func TestEveryToolKindRoundTripsThroughTheEngine(t *testing.T) {
 			map[string]any{"rule": "G1", "file": "a.txt", "line": 1, "quote": "bye", "note": "n", "confidence": 90},
 			"filed G1 at a.txt:1",
 		},
-		{"lint_backlog", map[string]any{"draft": "# x"}, "ok"},
+		{"lint_plan", map[string]any{"draft": "# x"}, "ok"},
 	}
 	for _, c := range cases {
 		text, failed := p.call(c.tool, c.args)

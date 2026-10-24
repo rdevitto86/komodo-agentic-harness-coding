@@ -146,9 +146,9 @@ func (h *Handler) Plan(ctx context.Context, r PlanRequest) (PlanResult, error) {
 	c, err := h.d.Context.GetContext(ctx, contextmgr.Request{
 		Agent: "planner", Tree: tree, Chain: h.d.Chain,
 		Slots: contextmgr.Values{
-			contextmgr.Goal:    goal,
-			contextmgr.Specs:   specs,
-			contextmgr.Backlog: backlogSummary(existing, locked),
+			contextmgr.Goal:  goal,
+			contextmgr.Specs: specs,
+			contextmgr.Plan:  backlogSummary(existing, locked),
 		},
 	})
 	if err != nil {
@@ -291,13 +291,9 @@ func (h *Handler) saveFailed(d PlanDraft) string {
 	return dir
 }
 
-// DraftFromResult copies the planner's final call into a draft.
+// DraftFromResult wraps the planner's plan text as a one-file draft named plan.md.
 func DraftFromResult(r agent.PlannerResult) PlanDraft {
-	d := PlanDraft{Files: make([]DraftFile, len(r.Files))}
-	for i, f := range r.Files {
-		d.Files[i] = DraftFile{Path: f.Path, Content: f.Content}
-	}
-	return d
+	return PlanDraft{Files: []DraftFile{{Path: "plan.md", Content: r.Plan}}}
 }
 
 // lockedInDraft returns the run of a group in a run that the draft rewrites, or "".

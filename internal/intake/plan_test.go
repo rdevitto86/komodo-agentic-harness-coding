@@ -322,8 +322,8 @@ func TestAmendedPlanNamingAGroupInARunIsLocked(t *testing.T) {
 	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); string(b) != old[0].Content {
 		t.Fatal("a locked group changed")
 	}
-	if !strings.Contains(r.ctx.req.Slots[contextmgr.Backlog], "run-9") {
-		t.Fatalf("backlog slot: %q", r.ctx.req.Slots[contextmgr.Backlog])
+	if !strings.Contains(r.ctx.req.Slots[contextmgr.Plan], "run-9") {
+		t.Fatalf("backlog slot: %q", r.ctx.req.Slots[contextmgr.Plan])
 	}
 }
 
@@ -474,11 +474,9 @@ func TestPlannerRoleHoldsNoWriteTool(t *testing.T) {
 	}
 }
 
-func TestDraftFromResultCopiesEveryFile(t *testing.T) {
-	d := DraftFromResult(agent.PlannerResult{
-		Files: []agent.PlannerFile{{Path: "a", Content: "1"}, {Path: "b", Content: "2"}},
-	})
-	if len(d.Files) != 2 || d.Files[1] != (DraftFile{Path: "b", Content: "2"}) {
+func TestDraftFromResultHoldsThePlanText(t *testing.T) {
+	d := DraftFromResult(agent.PlannerResult{Plan: "# Plan"})
+	if len(d.Files) != 1 || d.Files[0] != (DraftFile{Path: "plan.md", Content: "# Plan"}) {
 		t.Fatalf("draft: %+v", d)
 	}
 }

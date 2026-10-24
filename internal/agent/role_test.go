@@ -33,7 +33,7 @@ func TestRolesAreTheFourRegistryRoles(t *testing.T) {
 
 func TestPlannerRole(t *testing.T) {
 	r := PlannerRole()
-	if r.Name != "planner" || r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "lint_backlog"}) {
+	if r.Name != "planner" || r.PoolSlot || !slices.Equal(r.Tools, []string{"read", "search", "lint_plan"}) {
 		t.Fatalf("role = %+v", r)
 	}
 	if len(r.RunClasses) != 0 || len(r.Guard) != 0 || slices.Contains(r.Tools, "write") || slices.Contains(r.Tools, "run") {
@@ -46,17 +46,17 @@ func TestPlannerRole(t *testing.T) {
 }
 
 func TestParsePlannerResult(t *testing.T) {
-	raw := `{"files": [{"path": "epic-2/tg-2.1/TG.md", "content": "id: 0192e4c5-...\ngoal: x\n"}, {"path": ` +
-		`"epic-2/tg-2.1/tsk-add-lock.md", "content": "files: a.go\n"}]}`
+	raw := `{"plan": "# Plan\n\n- goal: x\n"}`
 	r, err := ParsePlannerResult([]byte(raw))
-	if err != nil || len(r.Files) != 2 || r.Files[0].Path != "epic-2/tg-2.1/TG.md" {
+	if err != nil || r.Plan != "# Plan\n\n- goal: x\n" {
 		t.Fatalf("parse: %+v %v", r, err)
 	}
 	for _, bad := range []string{
-		`{"files": []}`,
+		`{"plan": ""}`,
+		`{"plan": "  \n"}`,
 		`{}`,
-		`{"files": [{"path": " ", "content": "x"}]}`,
-		`{"files": [{"path": "a", "content": "x", "extra": 1}]}`,
+		`{"files": []}`,
+		`{"plan": "x", "extra": 1}`,
 		raw + " x",
 	} {
 		if _, err := ParsePlannerResult([]byte(bad)); err == nil {

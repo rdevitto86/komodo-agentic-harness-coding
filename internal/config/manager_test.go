@@ -307,7 +307,7 @@ func TestRoleFilesAreChecked(t *testing.T) {
 			"diff":           true,
 			"git_read":       true,
 			"submit_finding": true,
-			"lint_backlog":   true,
+			"lint_plan":      true,
 			"run_check":      true,
 		},
 	}

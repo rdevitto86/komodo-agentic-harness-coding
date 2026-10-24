@@ -230,7 +230,7 @@ func TestGuardBuilderTable(t *testing.T) {
 			"G1",
 		},
 		{"unknown tool", "bash", map[string]any{"command": "ls"}, "G1"},
-		{"lint_backlog for a builder", "lint_backlog", map[string]any{"draft": "x"}, "G1"},
+		{"lint_plan for a builder", "lint_plan", map[string]any{"draft": "x"}, "G1"},
 		{"skill", "skill", map[string]any{"name": "standards-go#errors"}, ""},
 		{"skill with a path name", "skill", map[string]any{"name": "../../etc/passwd"}, "G1"},
 		{"task_done", "task_done", map[string]any{"task": "t1"}, ""},
@@ -297,11 +297,12 @@ func TestGuardReviewerAndPlanner(t *testing.T) {
 			checkVerdict(t, g.Check(Call{Tool: c.tool, Args: jsonArgs(t, c.args)}), c.row)
 		})
 	}
-	t.Run("planner lint_backlog", func(t *testing.T) {
-		p := Permissions{Tools: []string{"read", "search", "lint_backlog"}}
+	t.Run("planner lint_plan", func(t *testing.T) {
+		p := Permissions{Tools: []string{"read", "search", "lint_plan"}}
 		g := newTestGuard(t, f, "planner", p, nil, 100)
-		checkVerdict(t, g.Check(Call{Tool: "lint_backlog", Args: jsonArgs(t, map[string]any{"draft": "x"})}), "")
+		checkVerdict(t, g.Check(Call{Tool: "lint_plan", Args: jsonArgs(t, map[string]any{"draft": "x"})}), "")
 		checkVerdict(t, g.Check(Call{Tool: "run", Args: jsonArgs(t, map[string]any{"class": "test"})}), "G1")
+		checkVerdict(t, g.Check(Call{Tool: "lint_backlog", Args: jsonArgs(t, map[string]any{"draft": "x"})}), "G1")
 	})
 }
 
@@ -320,7 +321,7 @@ func TestGuardFailsClosed(t *testing.T) {
 			"skill",
 			"submit_finding",
 			"task_done",
-			"lint_backlog",
+			"lint_plan",
 			"x.y",
 			"",
 		} {

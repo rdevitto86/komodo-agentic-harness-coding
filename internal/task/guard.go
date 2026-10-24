@@ -607,7 +607,7 @@ func parseCall(c Call) (parsed, *refusal) {
 		if err := decode(c.Args, &a); err != nil {
 			return unreadable("G1", err)
 		}
-	case "lint_backlog":
+	case "lint_plan":
 		var a lintArgs
 		if err := decode(c.Args, &a); err != nil {
 			return unreadable("G1", err)

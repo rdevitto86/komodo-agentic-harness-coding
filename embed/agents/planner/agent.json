@@ -8,7 +8,7 @@
   "tools": [
     "read",
     "search",
-    "lint_backlog"
+    "lint_plan"
   ],
   "run_classes": [],
   "guard": [],
@@ -34,38 +34,20 @@
     "optional": [
       "repo_context",
       "specs",
-      "backlog"
+      "plan"
     ]
   },
   "result": {
     "$id": "komodo:agent/planner/result/1",
     "additionalProperties": false,
     "properties": {
-      "files": {
-        "description": "Every task-list file of the plan, as an array of objects, never a string.",
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "content": {
-              "description": "The whole file as text, front matter included.",
-              "type": "string"
-            },
-            "path": {
-              "description": "File path under docs/backlog/, such as epic-2/tg-2.1/TG.md.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "content"
-          ],
-          "type": "object"
-        },
-        "type": "array"
+      "plan": {
+        "description": "The whole plan.md text, front matter included.",
+        "type": "string"
       }
     },
     "required": [
-      "files"
+      "plan"
     ],
     "type": "object"
   },

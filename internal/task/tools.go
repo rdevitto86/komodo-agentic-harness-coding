@@ -449,12 +449,12 @@ func builtinTools() []tool {
 		},
 		{
 			def(
-				"lint_backlog",
+				"lint_plan",
 				"Check a planned task list and return its lint errors, or ok.",
 				`{"type":"object","properties":{"draft":{"type":"string"}},`+
 					`"required":["draft"],"additionalProperties":false}`,
 			),
-			toolLintBacklog,
+			toolLintPlan,
 		},
 	}
 }

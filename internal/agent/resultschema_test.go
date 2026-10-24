@@ -26,7 +26,7 @@ var resultCases = []struct {
 }{
 	{
 		"planner", reflect.TypeOf(PlannerResult{}),
-		`{"files": [{"path": "epic-2/tg-2.1/TG.md", "content": "goal: x\n"}]}`,
+		`{"plan": "# Plan\n\n- goal: x\n"}`,
 		func(b []byte) error { _, err := ParsePlannerResult(b); return err },
 	},
 	{

@@ -79,7 +79,7 @@ var allTools = []string{
 	"skill",
 	"submit_finding",
 	"task_done",
-	"lint_backlog",
+	"lint_plan",
 	"run_check",
 }
 
@@ -493,10 +493,10 @@ func TestTaskDoneLintAndSkill(t *testing.T) {
 	if got := r.call("task_done", map[string]any{"task": "t1"}); got.Text != "exit code 0\nok t1" {
 		t.Errorf("task_done = %q", got.Text)
 	}
-	if got := r.call("lint_backlog", map[string]any{"draft": "good"}); got.Text != "ok" {
+	if got := r.call("lint_plan", map[string]any{"draft": "good"}); got.Text != "ok" {
 		t.Errorf("lint ok = %q", got.Text)
 	}
-	if got := r.call("lint_backlog", map[string]any{"draft": "bad"}); got.Text != "line 1: x\nline 2: y" {
+	if got := r.call("lint_plan", map[string]any{"draft": "bad"}); got.Text != "line 1: x\nline 2: y" {
 		t.Errorf("lint errors = %q", got.Text)
 	}
 	if got := r.call("skill", map[string]any{"name": "standards-go#errors"}); got.Text != "skill standards-go#errors" {

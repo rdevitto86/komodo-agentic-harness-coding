@@ -109,7 +109,7 @@ func (h *intakeHolder) start(ctx context.Context) (_ intake.PlannerSession, err 
 	return ps, nil
 }
 
-// lint runs the planner's lint_backlog tool on a draft given as text.
+// lint runs the planner's lint_plan tool on a draft given as text.
 func (h *intakeHolder) lint(draft string) []string {
 	var d intake.PlanDraft
 	if err := json.Unmarshal([]byte(draft), &d); err != nil {

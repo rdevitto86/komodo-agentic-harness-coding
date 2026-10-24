@@ -183,15 +183,15 @@ func TestPlannerSessionGetsItsBriefToolConfigAndLiveToolRoute(t *testing.T) {
 		names = append(names, d.Name)
 	}
 
-	if strings.Join(names, ",") != "read,search,lint_backlog" {
+	if strings.Join(names, ",") != "read,search,lint_plan" {
 		t.Fatalf("routed tools = %v", names)
 	}
 
 	args, _ := json.Marshal(map[string]string{"draft": "not json"})
 
-	text, ok := f.kit.s.tools.Call(context.Background(), id, "lint_backlog", args)
+	text, ok := f.kit.s.tools.Call(context.Background(), id, "lint_plan", args)
 	if !ok || !strings.Contains(text, "not a JSON task list") {
-		t.Fatalf("lint_backlog through the route = %q (found %v)", text, ok)
+		t.Fatalf("lint_plan through the route = %q (found %v)", text, ok)
 	}
 
 	args, _ = json.Marshal(map[string]string{"path": "go.mod"})
