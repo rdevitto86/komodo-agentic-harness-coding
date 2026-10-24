@@ -23,7 +23,7 @@ The document has 22 chapters, numbered 0 to 21. Chapters 1 to 19 each describe o
 | [6. Context Manager](#6-context-manager) | Skills, prompt templates, tool-server connections, briefs |
 | [7. Runtime Manager](#7-runtime-manager) | Running all groups, the group state machine, retries, timeouts, blocks |
 | [8. Cache Manager](#8-cache-manager) | The runtime cache |
-| [9. Lease Manager](#9-lease-manager) | Leases, fences, branches and worktrees |
+| [9. Lease Manager](#9-lease-manager) | Leases, fences and worktrees |
 | [10. State Manager](#10-state-manager) | Each group's runtime state |
 | [11. Task Manager](#11-task-manager) | One controller per group, the guard, the model client, the test sandbox |
 | [12. Builder](#12-builder) | The builder agent |
@@ -70,7 +70,7 @@ Every subsystem chapter has the same child pages, numbered `N.1` to `N.10`. A pa
 | Event types and subtypes | Type in kebab case from the diagram (`run-status`); subtype in `family.name` form (`session.end`) | [4. Event Bus](#4-event-bus) holds the full list |
 | Result and reason codes | Snake case from one enum (a fixed list of allowed values): `needs_scope`, `time_out` | A result, an event subtype's reason and a status line share the one list |
 | Runs, groups, sessions | A version 7 universally unique identifier (UUID) made by the binary; it starts with its creation time, so ids sort by age | A group keeps its readable label, numbered inside its plan, such as `tg-2`; a plan has an id, `plan-` and 6 random lowercase hexadecimal characters; commands take the plan id and a group label |
-| Branches | `komodo/<epic>` for an epic's shared branch; a group's branch name is open [TODO: the group branch name ([G-330](#g-330))] | Never the main branch |
+| Branches | `komodo/<epic>` for a plan's feature branch; a group has no branch of its own | Never the main branch |
 | Gaps | `G-NN` or `G-NNN`, one row each in the gap register | A gap is a fact not yet verified or a decision not yet made |
 
 ### 0.3 Package Map
@@ -470,10 +470,10 @@ A command that needs the engine writes one `engine.Request` as a line of JSON on
 |---|---|---|
 | `run (plan id)` | `Verb` `run`; `Event` run-start | One final `ok` whose `data` holds the run id, or `refused` with a `Code` |
 | `run (id) --schedule` | `Verb` `run`; `Flags.Schedule`; `Event` run-start with no run id and `data.schedule` set | One final `ok` whose `data` holds the run id the engine minted and the queued time |
-| `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
+| `run (id) --approve`, `--deny` | `Verb` `run`; `Event` run-continue with `data.groups` empty, or one label when a group follows the plan id; `Flags.Approve` or `Flags.Deny` | One final `ok`, or `refused` with `not_blocked` |
 | `run (id) --override` | `Verb` `run`; `Event` run-continue with `answer` `override`; `Flags.Override`; terminal only, checked by the CLI and again by the engine from the socket peer | One final `ok`, or `refused` with `no_terminal` (the requesting process has no controlling terminal), `not_blocked` (no override is waiting) or `group_failed` (the group already failed) |
 | `stop (id)` | `Verb` `stop`; `Event` run-stop | One final `ok`, or `refused` with `unknown_target` |
-| `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan; planning ends when the `plan` / `written` event arrives, then one final `ok` whose `data` holds the plan id and the path of `plan.md`. [TODO: an auto-approved plan also starts a run ([G-322](#g-322))] |
+| `plan` | `Verb` `plan`; `Event` plan | `event` replies for the `error` events of the plan; planning ends when the `plan` / `written` event arrives, then one final `ok` whose `data` holds the plan id and the path of `plan.md`. `plan` has no option that starts a run. |
 | `status`, `status (id)` | `Verb` `status`; `Target` for `(id)`; `Root`; `Flags.All`, `Flags.Wait`, `Flags.TimeoutS` | One final `ok` holding `StatusData`, with `figures` for `(id)`, `explain` for a failed or blocked group, and `recent` and `scorecard` for `--all`. With `--wait`, an `ok` holding `StatusData` after each change, then a final `ok` with `{"waited": "blocked"}`, `"done"` or `"timeout"` |
 | `replay (id)` | `Verb` `replay`; `Target` | One `event` reply per recorded event, then a final `ok` with `{"gaps": 0}` |
 | `abandon (id)` | `Verb` `abandon`; `Target` | One final `ok`, or `refused` with `unknown_target` |
@@ -787,7 +787,7 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 
 | Command | The id is |
 |---|---|
-| `run` | A plan id alone; a group label is a usage error |
+| `run` | A plan id alone; a group label after it names one group: with `--approve` or `--deny` it answers that group, and with a prompt it rewrites that group and runs it |
 | `plan` | Optional: an existing plan id, to amend that plan |
 | `stop`, `replay`, `status` | A plan id, a plan id then a group label, or a run id. A group label alone is a usage error; after a plan id it means that group's latest attempt, and a run id means that one attempt. `status` takes none to list live runs |
 | `abandon` | A plan id and a group label |
@@ -826,7 +826,7 @@ The id is a dotted settings key such as `limits.group_retries` or `agents.review
 
 Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input. `plan <plan id>` with a goal amends that plan: only groups that have not started change, and a change to a running or done group is refused.
 
-`plan` writes `plan.md`, prints its path and the plan id, and stops; manual approval is the default. A person or the orchestrator may read and edit the file, then start it with `komodo run <plan id>`. A document set may include a `docs/backlog/` folder; the planner reads it like any other input document. [TODO: the auto-approval options on top of manual approval ([G-322](#g-322))]
+`plan` writes `plan.md`, prints its path and the plan id, and stops; `plan` has no auto-approval option. A person or the orchestrator may read and edit the file, then start it with `komodo run <plan id>`. A document set may include a `docs/backlog/` folder; the planner reads it like any other input document.
 
 ##### `run`
 
@@ -836,13 +836,16 @@ Anyone runs `run (plan id)`, usually the orchestrator. It sends the engine a `ru
 |---|---|
 | `run <plan id>` | Looks up the existing plan and finishes it: runs every group that is not done, each from its saved state. Done, blocked and running status comes from the group state, never from a file |
 | `run <id> --schedule <time>` | Queues the run for `<time>`, an RFC 3339 timestamp (an internet date-time format) such as `2026-10-16T02:00:00-07:00` |
-| `run <id> --approve` | Answers a blocked group by granting what it asked for, such as more files or more time |
-| `run <id> --deny` | Answers a blocked group by refusing what it asked for |
+| `run <plan id> --approve` | Answers every blocked group of the plan by granting what it asked for, such as more files or more time |
+| `run <plan id> <group> --approve` | Grants what that one blocked group asked for |
+| `run <plan id> --deny` | Answers every blocked group of the plan by refusing what it asked for |
+| `run <plan id> <group> --deny` | Refuses what that one blocked group asked for |
+| `run <plan id> <group>` with a prompt | The planner rewrites that one group from the prompt, the lint checks run again on the plan, and the group then runs, so the changes are made [TODO: how the prompt is passed on the command line, and what the rewrite does for a group that is running or done ([G-331](#g-331))] |
 
 - **Continuing.** A group that already has saved state continues from it, so `komodo run plan-7f3a9c` after a crash continues each group from its saved state. A group that needs another pass, such as after a hand fix in its worktree, also continues with `komodo run plan-7f3a9c`: it picks up at the group's current stage and runs test and review again before commit. `build`, `test` and `review` are not commands.
 - **Scheduling.** `--schedule` is a socket request, not an event. The engine mints the run id, writes the entry (`target`, `root`, `run_id`, `at`, `queued_at`, `start`) to the schedule queue, returns the run id in its reply, stays up while any run is live or queued, and starts the run at its time. The reply shows the run id and the queued time, and `status` lists the queued run. When the entry fires, the engine publishes the one `run-start` with that run id.
-- **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. The Runtime Manager passes the answer to the group's Task Manager over its command channel. A group that is not blocked refuses the answer with `not_blocked`. [TODO: which blocked group an answer reaches when a plan has more than one ([G-329](#g-329))]
-- **Combinations.** `--approve` and `--deny` take an id and cannot combine with each other or `--schedule`. A combination is a usage error.
+- **Answering.** `--approve` and `--deny` send a `run-continue` event with `answer` set. With a plan id alone, the answer reaches every blocked group of the plan; with a group label after it, only that group. The Runtime Manager passes the answer to each reached group's Task Manager over its command channel. A named group that is not blocked refuses the answer with `not_blocked`.
+- **Combinations.** `--approve` and `--deny` take a plan id, or a plan id then a group label, and cannot combine with each other or `--schedule`. A group label with neither `--approve`, `--deny` nor a prompt is a usage error.
 
 ##### `stop`
 
@@ -966,7 +969,7 @@ Anyone runs `abandon (id)` to drop a group for good. The id is a plan id then a 
 
 1. The CLI sends an `abandon` request to the engine.
 2. The Runtime Manager stops the group's Task Manager.
-3. The Cleanup Handler frees the group's resources: its branch, worktree and sandbox, and the Runtime Manager releases its lease through the Lease Manager.
+3. The Cleanup Handler frees the group's resources: its worktree and sandbox, and the Runtime Manager releases its lease through the Lease Manager.
 4. Groups that depend on the abandoned group block with the reason `dependency`, naming it.
 5. The group's saved state and event log stay on disk.
 
@@ -1025,7 +1028,7 @@ A person at a terminal runs `login --{provider}` to set up model access for one 
 
 Anyone runs `clean`, including the orchestrator. It removes everything that belongs to no open run. An open run is one that is live, paused, blocked or queued.
 
-- Group worktrees and local group branches.
+- Group worktrees.
 - Docker containers.
 - Runtime cache entries, and the language and build caches of repositories with no open run.
 - Event logs and metrics records past retention.
@@ -1207,7 +1210,7 @@ An install script reads the same `latest.json` over HTTPS, compares the SHA-256,
 
 The CLI sends each event to the engine over the control socket, and the engine's Event Bus broadcasts it, so the CLI never waits on the part that handles it. It sends `run-start`, `run-stop` and `run-continue` for its commands and `plan` for `komodo plan`.
 
-- **End of planning:** the Intake Handler publishes `plan` / `written` inside the engine process and starts no run. [TODO: whether an auto-approved plan publishes `run-start` itself, with `source` `intake` ([G-322](#g-322))]
+- **End of planning:** the Intake Handler publishes `plan` / `written` inside the engine process and starts no run and never publishes `run-start`.
 - **Other events:** the Configuration Manager publishes `skill` and `mcp` right after it saves a change to either, and when it detects a hand edit on its next read ([3](#3-configuration-manager)).
 
 The `run-start` the engine publishes when the entry for `komodo run plan-7f3a9c --schedule 2026-10-16T02:00:00-07:00` fires (`plan-7f3a9c` is an example plan id):
@@ -1231,7 +1234,7 @@ The `run-start` the engine publishes when the entry for `komodo run plan-7f3a9c 
 }
 ```
 
-A `run-continue` for `komodo run plan-7f3a9c --approve`:
+A `run-continue` for `komodo run plan-7f3a9c tg-2 --approve`:
 
 ```json
 {
@@ -1245,7 +1248,7 @@ A `run-continue` for `komodo run plan-7f3a9c --approve`:
 ```
 
 - `group` is empty on events the CLI sends; `data.target` and `data.groups` name what to run, so the Runtime Manager never searches on its own.
-- `groups` is empty on `run-start`, which means every group of the plan that is not done; the Runtime Manager reads that from the group state and starts the groups in dependency order. On `run-continue` it names the answered group [TODO: which blocked group an answer reaches when a plan has more than one ([G-329](#g-329))].
+- `groups` is empty on `run-start`, which means every group of the plan that is not done; the Runtime Manager reads that from the group state and starts the groups in dependency order. On `run-continue` it is empty to answer every blocked group of the plan, or holds one label to answer that group; the example answers `tg-2` alone.
 - `target` is the plan id the person typed. `schedule` is present only with `--schedule`. `source` is `cli`.
 - `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a plan id was typed; the Runtime Manager then takes the plan's latest attempt and returns the run id in its `accepted` reply.
 - `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
@@ -1369,8 +1372,9 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Help against the table:** `--help --json` and the command table disagree only when the test fails.
 - **Short commands:** `--help` and `config get` each answer under 50 ms.
 - **Version kept:** a fixture task group that names an older version keeps that version folder through an update.
-- **Label resolution:** a plan id resolves to the blueprint in a fixture plan folder, `tg-2` after it names one group of that plan, and an unknown plan id or group label exits 2 with `usage`; `run plan-7f3a9c tg-2` exits 2 with `usage`, and `plan plan-7f3a9c` with a goal sends a `plan` event whose `plan` field is `plan-7f3a9c`.
-- **Answer flags:** `run plan-7f3a9c --approve --deny` exits 2 with `usage`; `--approve` for a group that is not blocked exits 1 with `not_blocked`.
+- **Label resolution:** a plan id resolves to the blueprint in a fixture plan folder, `tg-2` after it names one group of that plan, and an unknown plan id or group label exits 2 with `usage`; `run plan-7f3a9c tg-2` with no prompt, `--approve` or `--deny` exits 2 with `usage`, and `plan plan-7f3a9c` with a goal sends a `plan` event whose `plan` field is `plan-7f3a9c`.
+- **Answer flags:** `run plan-7f3a9c --approve --deny` exits 2 with `usage`; `run plan-7f3a9c --approve` against a fake engine with 2 blocked groups answers both; `run plan-7f3a9c tg-2 --approve` answers `tg-2` only; `--approve` for a named group that is not blocked exits 1 with `not_blocked`.
+- **Group rewrite:** `run plan-7f3a9c tg-2` with a prompt sends the prompt to the planner, which rewrites `tg-2` only, and the lint checks run again on the plan before the group runs.
 - **Schedule time:** `--schedule 2026-10-16T02:00:00-07:00` is accepted; `--schedule tomorrow` exits 2 with `usage`.
 - **Engine on demand:** with no listener on a fixture `engine.sock`, `Engine.Ensure` starts a fake engine and the request is sent once; a second command finds the first engine and starts none.
 - **Socket access:** the fixture `engine.sock` is created readable and writable by its owner only.
@@ -1386,8 +1390,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-19](#g-19) | The 50 ms short-command budget is a target until measured |
 | [G-21](#g-21) | Enterprise signing: key management service and refusal of an older manifest |
 | [G-121](#g-121) | Whether native Windows needs its own console check in `validate`; applies only if native Windows returns |
-| [G-322](#g-322) | Whether an auto-approved plan also starts a run |
-| [G-329](#g-329) | Which blocked group an answer reaches when a plan has more than one |
+| [G-331](#g-331) | How a group rewrite takes its prompt, and what it does to a running or done group |
 
 ## 2. Output Formatter
 
@@ -2766,7 +2769,7 @@ A run-level event, the CLI's request to finish a plan at a scheduled time (`komo
 }
 ```
 
-`data.schedule` is absent for a run that starts at once. [TODO: whether an auto-approved plan publishes `run-start` with `"source": "intake"` ([G-322](#g-322))]
+`data.schedule` is absent for a run that starts at once. `source` is always `"cli"`.
 
 **Fields the event does not carry.** The event line holds no `version`, `sequence`, `epoch`, `stale`, `cause`, `last`, `checksum`, `stage`, `session` or `reason`.
 - `stage`, `session` and `reason` live in `data`, through the embedded `GroupFacts` below.
@@ -2794,7 +2797,7 @@ The three command events tell the Runtime Manager what to do, so it never search
 type RunStart struct {
 	Target   string    `json:"target"`            // the plan id the command named, such as plan-7f3a9c
 	Groups   []string  `json:"groups"`            // the group labels to run, such as tg-2; empty means every group not done
-	Source   string    `json:"source"`            // "cli"; "intake" is open ([G-322](#g-322))
+	Source   string    `json:"source"`            // always "cli"
 	Schedule time.Time `json:"schedule,omitzero"` // RFC 3339 start time of a scheduled run; absent otherwise
 	Repo     string    `json:"repo"`              // the repository id the run belongs to
 	Root     string    `json:"root"`              // the repository root on this machine
@@ -2818,7 +2821,7 @@ type RunContinue struct {
 
 `abandon` is a control request on the engine's socket, not an event ([7.5](#75-behaviour)).
 
-The Runtime Manager sends an `Answer` down the group's command channel to its Task Manager. `komodo run (id) --schedule` publishes no event. It is a request on the control socket; the engine mints the run id, stores it in the schedule queue entry (`~/.komodo/state/schedule.json`, kept by the [State Manager](#10-state-manager)) and publishes the one `run-start`, with that run id and `schedule` set, when the entry fires.
+The Runtime Manager sends an `Answer` down each reached group's command channel to its Task Manager: every blocked group of the plan when `groups` is empty, the named group otherwise. `komodo run (id) --schedule` publishes no event. It is a request on the control socket; the engine mints the run id, stores it in the schedule queue entry (`~/.komodo/state/schedule.json`, kept by the [State Manager](#10-state-manager)) and publishes the one `run-start`, with that run id and `schedule` set, when the entry fires.
 
 What `run-continue` resets for each block reason is owned by [7. Runtime Manager](#7-runtime-manager).
 
@@ -3781,7 +3784,7 @@ No gap row touches this chapter.
 
 The Intake Handler turns a request to plan into a plan the rest of the harness can run. It reads source documents such as an HLD, a product requirements document or a `docs/backlog/` folder, starts the planner agent through the model client, checks the planner's draft with plain Go code, and publishes the `plan` / `written` event, which ends planning, when the draft passes. The purpose and the interactions are in [HLD 5.6](hld.md#56-intake-handler).
 
-The Intake Handler writes plans only. It creates no branch or worktree and takes no lease: the Task Manager creates a group's branch and worktree ([chapter 11](#11-task-manager)), and the Lease Manager holds the lease ([chapter 9](#9-lease-manager)).
+The Intake Handler writes plans only. It creates no branch or worktree and takes no lease: the Task Manager creates a group's detached worktree ([chapter 11](#11-task-manager)), and the Lease Manager holds the lease ([chapter 9](#9-lease-manager)).
 
 ### 5.1 Scope and Concepts
 
@@ -3799,7 +3802,7 @@ The Intake Handler writes plans only. It creates no branch or worktree and takes
 - The planner's brief, its slots and the repo map: [chapter 6](#6-context-manager) builds them; this chapter asks for them through `GetContext()`.
 - Link choice and the model client (`internal/llm`) that the Intake Handler opens the planner session through ([chapter 11](#11-task-manager)).
 - Running groups, group order and group timers: [chapter 7](#7-runtime-manager).
-- The lease record of a group: [chapter 9](#9-lease-manager). Its branch and worktree: the Task Manager ([chapter 11](#11-task-manager)).
+- The lease record of a group: [chapter 9](#9-lease-manager). Its worktree: the Task Manager ([chapter 11](#11-task-manager)).
 - Done, blocked and running status of a group: the group state ([chapter 10](#10-state-manager)). No file holds it.
 - Deleting the plan folder: the Cleanup Handler, once every group of the plan is closed, and `komodo clean` for stale plan folders ([chapter 16](#16-cleanup-handler)).
 - The agent definition of the planner (model weight, limits, chain): [chapter 3](#3-configuration-manager).
@@ -4141,7 +4144,7 @@ The Intake Handler subscribes to `plan` and publishes `plan` / `written` and `er
 }
 ```
 
-The handler ends planning by publishing `plan` / `written` for the plan it just wrote. It starts no run; the person or the orchestrator starts it with `komodo run <plan id>`. [TODO: whether an auto-approved plan starts a run itself, and how ([G-322](#g-322))]
+The handler ends planning by publishing `plan` / `written` for the plan it just wrote. It starts no run; the person or the orchestrator starts it with `komodo run <plan id>`.
 
 ```json
 {
@@ -4318,7 +4321,7 @@ func (g Graph) LongestChain() int
 
 #### Order of groups
 
-`Plan` fills `PlanResult.Groups` with the plan's groups in dependency order (wave first, then plan order). Which groups run is decided from the group state: `komodo run <plan id>` starts every group that is not done, and `komodo run <plan id> tg-2` starts one ([chapter 7](#7-runtime-manager)).
+`Plan` fills `PlanResult.Groups` with the plan's groups in dependency order (wave first, then plan order). Which groups run is decided from the group state: `komodo run <plan id>` starts every group that is not done ([chapter 7](#7-runtime-manager)).
 
 #### Planning
 
@@ -4617,14 +4620,14 @@ These use a mock model client that returns scripted drafts, and a fake bus.
 - A failed plan publishes no `plan` / `written` event.
 - The planner session receives no write tool.
 
+
 ### 5.10 Open Gaps
 
 Each id is a row in the [gap register](#appendix-b-gap-register); the rows are not copied here.
 
 | Gap | Question |
 |---|---|
-| [G-322](#g-322) | Whether an auto-approved plan also starts a run |
-
+| [G-331](#g-331) | How a group rewrite takes its prompt, and what it does to a running or done group |
 
 ## 6. Context Manager
 
@@ -5794,7 +5797,7 @@ type InputKind string
 
 const (
 	InGroupStart    InputKind = "group.start"    // the group is ready and a pool slot is free
-	InLeaseGranted  InputKind = "lease.granted"  // data: fence, branch, worktree
+	InLeaseGranted  InputKind = "lease.granted"  // data: fence, worktree
 	InReady         InputKind = "ready"          // the Task Manager is running and its sandbox is wired
 	InStageDone     InputKind = "stage.done"     // data: stage; Build done, Test and Review approved, Commit published
 	InResultFail    InputKind = "result.fail"    // Test and Review failed; data: items, tree, regression
@@ -6018,7 +6021,7 @@ The `run-start` event's `data` says which plan and groups to run, so the Runtime
 |---|---|
 | `target` | The plan id the person typed |
 | `groups` | The group labels the person named. Empty means every group of the plan that is not done, by the group state; the Runtime Manager orders them by dependency |
-| `source` | `cli` [TODO: whether an auto-approved plan publishes with `intake` ([G-322](#g-322))] |
+| `source` | `cli` |
 | `schedule` | Present only for a queued run: the entry's `at`; the run id is the entry's `run_id`, minted when the entry was queued |
 | `repo`, `root` | The repository id and the repository root, because the engine hosts runs of several repositories |
 
@@ -6125,7 +6128,7 @@ type StateStore interface {
 type LeaseStore interface {
 	Grant(ctx context.Context, req lease.GrantRequest) (lease.Lease, error)
 	Renew(ctx context.Context, l lease.Lease) (lease.Lease, error)
-	Revoke(ctx context.Context, repo, group string, why lease.RevokeReason) error // ends the lease, keeps the branch and worktree
+	Revoke(ctx context.Context, repo, group string, why lease.RevokeReason) error // ends the lease, keeps the worktree
 	Holder(ctx context.Context, repo, group string) (lease.Lease, bool, error)
 	IsOwner(ctx context.Context, l lease.Lease) (bool, error)
 	Release(ctx context.Context, l lease.Lease) error // deletes the record when the group closes
@@ -6259,11 +6262,11 @@ flowchart LR
 On any error it catches, the Error Handler publishes one final `error` event before the engine exits, so a caught failure reaches both the saved State and the event log.
 
 What each verb does in the engine:
-- **`run (id)`:** publishes `run-start` for the groups in `data.groups`. A group that already has a saved record is continued ([Continuing a group with `run (id)`](#continuing-a-group-with-run-id)). With `--approve` or `--deny`, the engine makes a `scope.answer` input, or replies `not_blocked`. With `--schedule`, it writes a queue entry.
+- **`run (id)`:** publishes `run-start` for the groups in `data.groups`. A group that already has a saved record is continued ([Continuing a group with `run (id)`](#continuing-a-group-with-run-id)). With `--approve` or `--deny`, the engine makes a `scope.answer` input for each blocked group the answer reaches (every blocked group of the plan, or the one named), or replies `not_blocked` for a named group that is not blocked. With `--schedule`, it writes a queue entry.
 - **`stop (id)`:** publishes `run-stop`, and removes a matching queue entry.
 - **`status`:** answers with live runs, their groups and the queued entries. With a target it adds that run's or group's figures; with `--all` it adds the recent runs with their totals and the scorecard, read from the Metrics Service. With `--wait`, the connection stays open until a group is Blocked or every group is Done, and the final reply carries the blocked group's question.
 - **`ui`:** has no verb. The CLI process serves the dashboard page and reads from the engine over this socket with `status`; the engine never serves HTTP.
-- **`clean`:** removes everything that belongs to no open run, and replies with what it removed or, with `Flags.DryRun`, would remove. It asks the Cleanup Handler for `Sweep`, which clears worktrees, local group branches and containers; calls `Cache.Clear` for the repositories with no open run, which covers the runtime cache and the language and build caches; and calls `Bus.Trim` and the Metrics Service's `Trim` for event logs and metrics records past retention. An open run is one that is live, paused, blocked or queued; nothing a live lease holds or an open run uses is touched. `komodo update` asks for `UnusedVersions` through the same verb.
+- **`clean`:** removes everything that belongs to no open run, and replies with what it removed or, with `Flags.DryRun`, would remove. It asks the Cleanup Handler for `Sweep`, which clears worktrees and containers; calls `Cache.Clear` for the repositories with no open run, which covers the runtime cache and the language and build caches; and calls `Bus.Trim` and the Metrics Service's `Trim` for event logs and metrics records past retention. An open run is one that is live, paused, blocked or queued; nothing a live lease holds or an open run uses is touched. `komodo update` asks for `UnusedVersions` through the same verb.
 - **`abandon (id)`:** a control request, not an event. The Runtime Manager stops the group, makes the `abandon` input, and calls the Cleanup Handler's `Discard`, which frees the group's resources.
 - **`replay (id)`:** reads the event store through `bus.Reader` ([chapter 4](#4-event-bus)) for the run or group and streams one `event` reply per recorded event, then a final reply carrying the gap count. It calls no model and changes nothing.
 - **`plan`:** publishes the `plan` event.
@@ -6310,7 +6313,7 @@ flowchart LR
 3. A group with a saved record that is not Done goes to the recovery pass instead ([Crash recovery](#crash-recovery-and-restarting-groups)); a Done group is skipped. Done is read from the group state, never from a file.
 4. A group is ready when `Startable` is true and its record does not exist yet. A group whose dependency is Blocked or Paused is not ready and is shown as waiting on that group in the run's view; its own record is untouched.
 5. When fewer than the pool size of groups are active, `Pick` chooses a ready group. An active group is one in any stage; Paused and Blocked groups are not active.
-6. The group's first input is `group.start`; its first order is to take the lease, which records the branch and worktree names. The Task Manager creates the group's branch [TODO: the group branch name ([G-330](#g-330))] and the worktree when it handles `start`.
+6. The group's first input is `group.start`; its first order is to take the lease, which records the worktree path. The Task Manager creates the group's detached worktree when it handles `start`.
 7. When `lease.granted` is saved, the Runtime Manager calls `TaskGroups.Start` with the repository's cache handle. It then sends `start` for `OrderStartGroup` down the new command channel, and the Task Manager reports `ready`.
 
 `run-start` naming one group runs that group alone; it is refused with `error` / `run-refused`, naming the dependency, when a dependency outside the run is not Done. A cycle in the plan is refused the same way.
@@ -6461,7 +6464,7 @@ When the group continues, the next Builder session's brief says so and lists tho
 Before any Task Manager starts, the Runtime Manager makes sure the epic's branch exists.
 1. At run start, the Runtime Manager checks whether `komodo/<epic>` exists, locally or on the remote, through `EpicGit.BranchExists`.
 2. When it is missing, the Runtime Manager resolves the base branch and remote as the Commit Handler does (15.5, Base branch), fetches the base branch with `EpicGit.FetchBranch`, and creates the epic branch from the remote-tracking reference `refs/remotes/<remote>/<base>` through `EpicGit.CreateBranch`. It never creates or moves the person's local base branch and checks nothing out; a failed fetch refuses the run.
-3. Only then do Task Managers cut group branches from the epic tip.
+3. Only then do Task Managers detach group worktrees at the epic tip.
 
 So every group starts from the base branch and all landed work. The plan is never committed. The Commit Handler remains the only part that commits and pushes.
 
@@ -6589,7 +6592,7 @@ A Task Manager sends `timer.extend` when a session nears its wall limit and its 
 
 #### Landing on an epic's branch
 
-Each epic has one shared branch, `komodo/<epic>`. Each group works on its own branch [TODO: the group branch name ([G-330](#g-330))]. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
+Each plan has one feature branch, `komodo/<epic>`, and every group lands on it. A group has no branch of its own: it works in a detached worktree. The Runtime Manager hands the Commit Handler the epic's `LandingPlan` and the Commit Handler does the rest:
 - It squashes each approved group onto the epic's branch as one local commit, one group at a time per epic. A group of level `high` or `critical` is quarantined instead.
 - It rechecks the epic's branch after each landing; a failed recheck pauses landings on that epic until the recheck passes.
 - The Runtime Manager asks it to push the epic once the epic goes quiet (`settleEpicsLocked`, `internal/engine/epicpush.go`): none of the epic's groups works, waits for a start or can still start, and more groups are Done than the last push covered. `PushEpic` pushes the branch and opens or refreshes the epic's pull request only when `EpicPush.Done` names every group of the epic ([15.4](#154-interfaces)).
@@ -6669,9 +6672,9 @@ type Transition struct {
 | 17 | Build, Test and Review | `limit.pause` | No live session or running action | Paused | `Prior` = stage; `Pause` set from the input with `Until` = `reset_at` + 1 minute, and no `Until` for cause `spending`; orders `hold`; emits `group.paused` |
 | 18 | Build, Test and Review | `session.end` | `Pause.After` is set | Paused | `Prior` = stage; `Resume` added; `After` cleared; orders `hold`; emits `group.paused` |
 | 19 | Commit; Paused or Blocked with `Prior` Commit | `continue`, or the recovery pass | | Test and Review | Epoch + 1; open Commit orders dropped; orders `enter_stage` Test and Review on the group's tree; emits `group.resumed` when the group was Paused or Blocked, then `stage.enter` |
-| 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the branch, worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
+| 20 | Any stage but Done | `abandon` | | Done | `Outcome` abandoned; orders `cancel`; the Cleanup Handler's `Discard` frees the worktree and sandbox; `LeaseStore.Release` ends the lease; dependents block `dependency`; emits `group.done` |
 | 21 | Blocked on `retries` | `override` | Before `Block.Until` | Build | `RetriesLeft` set to 1; `FinalWallMin` set to the minutes in the request (`limits.group_wall_min` when it carries none; a value outside 1 to 480 is refused); `Overrides` + 1; `Tries` + 1; Test and Review results cleared; orders `enter_stage` Build with `LastFindings` and the failing items; judges run again only after the Builder's next change; Epoch + 1; emits `override.approved`, `group.resumed`, `stage.enter` |
-| 22 | Blocked on `retries` | `timer.due` reason `override_lapse` | `Block.Until` reached | Done | `Outcome` failed; orders `cancel` and `release`; emits `override.lapsed`, `group.failed`, `group.done`; the history stays and the Cleanup Handler may free the worktree, caches and branches |
+| 22 | Blocked on `retries` | `timer.due` reason `override_lapse` | `Block.Until` reached | Done | `Outcome` failed; orders `cancel` and `release`; emits `override.lapsed`, `group.failed`, `group.done`; the history stays and the Cleanup Handler may free the worktree and caches |
 
 #### The retry budget
 
@@ -6696,7 +6699,7 @@ A true failure that finds `RetriesLeft` at 1 is the group's last: it sets `Retri
 2. The window passes with no approval. The timer `override_lapse` fires, the override lapses by itself and the group fails (below). A group whose `Overrides` is already 1 fails at once: an override is offered one time per group, so the final try's failure fails the group with no second wait.
 3. At engine start the engine reads every saved group blocked on `retries` with a `Block.Until` (found through the lease registry, which survives a killed engine) and arms its timer from that deadline. A deadline that passed while the engine was down lapses at once: `override.lapsed`, then `group.failed`. While such a timer is armed the engine does not exit.
 
-A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `release`, so the lease is released and no pool slot is held; it emits `override.lapsed` (when an override was offered), `group.failed` and `group.done`. The group's event history is kept. Its worktree, caches and branches are no longer held by any run, so the Cleanup Handler's sweep may delete them. A failed group is never continued: `run (id)` and `--override` on it are refused with code `group_failed`, which says to plan it again. The only way back is a fresh pipeline run with a new plan, context, cache and worktree. The run lists the group as stalled with reason `failed`, and the groups that depend on it do not start.
+A **failed** group is Done with `Outcome` failed. `Next` orders `cancel` and `release`, so the lease is released and no pool slot is held; it emits `override.lapsed` (when an override was offered), `group.failed` and `group.done`. The group's event history is kept. Its worktree and caches are no longer held by any run, so the Cleanup Handler's sweep may delete them. A failed group is never continued: `run (id)` and `--override` on it are refused with code `group_failed`, which says to plan it again. The only way back is a fresh pipeline run with a new plan, context, cache and worktree. The run lists the group as stalled with reason `failed`, and the groups that depend on it do not start.
 
 #### Failing checks in a try
 
@@ -6757,7 +6760,7 @@ Each row's input is the one that spends the bound or reports the failure; the bo
 | `session.end` reason `needs_scope`, or `scope.ask` | Build | The scope rules in 7.5 did not deny it | `needs_scope` |
 | `fault` | Build, Test and Review | Every link is unavailable or unauthorized, none limited | `no_provider` |
 | `fault` | Intake, Build, Test and Review | The brief exceeds half the context of every link | `context` |
-| `fault` | Intake, Build, Test and Review | The lease, branch, worktree or sandbox could not be set up, or the guard rules did not load; the detail names the rules file `internal/task/policy.json` | `setup`; no retry is spent |
+| `fault` | Intake, Build, Test and Review | The lease, worktree or sandbox could not be set up, or the guard rules did not load; the detail names the rules file `internal/task/policy.json` | `setup`; no retry is spent |
 | `session.end` reason `crash` | Build, Test and Review | `FaultStreak` reached 4 (other Komodo faults and judge crashes) | `crash`; the block spends no try and the group does not fail; a builder crash that no Komodo restart caused spends a try by the builder row above |
 | `fault` | Commit | A push or pull request failed 3 times | `commit` |
 | `fault` | Commit | The branch conflicts with its base and one automatic merge did not resolve it | `merge_conflict` |
@@ -6949,7 +6952,7 @@ Each case is a table test on `Next`, a component test on the run loop with fake 
 - A fake core loop that stops beating for 60 seconds is restarted; a Task Manager restart continues from the saved state and costs no try.
 - A fake engine that does not reply for 10 seconds with a beat file 31 seconds old is killed as a process tree, a new engine starts, and the command is sent once more; with a beat file 20 seconds old the CLI keeps waiting.
 - A `session.end` input with `unfinished` sets `Unfinished`; a continued group's `enter_stage` order carries it, and the group record shows no commit for that task.
-- A run whose epic branch is missing gets it created from the base branch, with no commit of its own, before the first group branch is cut; an existing epic branch is left as it is.
+- A run whose epic branch is missing gets it created from the base branch, with no commit of its own, before the first group worktree is created; an existing epic branch is left as it is.
 - A queued entry fires: the engine publishes the entry's stored `start` as the `run-start` data, and the event carries the `run_id` the queue reply returned.
 - Closing a group calls `LeaseStore.Release` once.
 
@@ -7369,23 +7372,23 @@ Tests use a temporary directory; no network and no live provider.
 
 ## 9. Lease Manager
 
-The Lease Manager keeps the lease registry, the single source of truth for which task group owns which branch and which worktree (a private git checkout where one group works), across all groups and runs on a machine. It controls access to them, revokes leases, times them out and releases a lease when its group closes. It performs no git writes; the Runtime Manager is its caller for grants, renewals, revocations and releases. The purpose of the subsystem and who it talks to are in [HLD 5.10](hld.md#510-lease-manager).
+The Lease Manager keeps the lease registry, the single source of truth for which task group owns which worktree (a private git checkout where one group works), across all groups and runs on a machine. It controls access to them, revokes leases, times them out and releases a lease when its group closes. It performs no git writes; the Runtime Manager is its caller for grants, renewals, revocations and releases. The purpose of the subsystem and who it talks to are in [HLD 5.10](hld.md#510-lease-manager).
 
 ### 9.1 Scope and Concepts
 
 **Owns:**
-- The lease registry: one JSON file per task group plus one lock file per lease, the single source of truth for branch and worktree ownership across all groups and runs on a machine.
+- The lease registry: one JSON file per task group plus one lock file per lease, the single source of truth for worktree ownership across all groups and runs on a machine.
 - Granting, renewing, revoking and timing out leases.
 - Releasing a lease when its group closes. Paused groups keep their leases.
 - The fence number, a counter in each record that rises on every grant, takeover and revocation.
 - Answering "is this group still the owner" when asked.
 
 **Does not own:**
-- Creating a group's branch and worktree: [Task Manager](#11-task-manager).
+- Creating a group's worktree: [Task Manager](#11-task-manager).
 - Saving finished work: the Task Manager asks the [Commit Handler](#15-commit-handler) for a local commit after each finished task.
 - Any git write. The Lease Manager never runs `git commit`, `git push` or `git worktree`.
-- Removing a group's branches and worktrees: [Cleanup Handler](#16-cleanup-handler).
-- Pushing each approved group onto its epic's shared branch, `komodo/<epic>`, and opening the epic's pull request: [Commit Handler](#15-commit-handler). A lease names only the group's own branch, `komodo/<epic>-<group>`; the epic branch is not leased.
+- Removing a group's worktrees: [Cleanup Handler](#16-cleanup-handler).
+- Landing each approved group on the plan's feature branch, `komodo/<epic>`, and opening the plan's pull request: [Commit Handler](#15-commit-handler). A lease names only the group's worktree; the plan's feature branch is not leased.
 - When to renew, whom to revoke, and when to run the sweep: [Runtime Manager](#7-runtime-manager); the sweep runs once each time the engine starts, after crash recovery.
 - A group's runtime state, which only carries a copy of the fence: [State Manager](#10-state-manager).
 - Agent permissions inside the worktree: [Task Manager](#11-task-manager).
@@ -7394,7 +7397,7 @@ The Lease Manager keeps the lease registry, the single source of truth for which
 
 | Term | Meaning |
 |---|---|
-| Lease | The registry record that names the one run holding a group's branch and worktree |
+| Lease | The registry record that names the one run holding a group's worktree |
 | Holder | The run, with its process, that a lease names |
 | Fence | A whole number in the record that rises on every grant, takeover and revocation of a group's lease |
 | Takeover | A new run replacing a holder whose lease is dead |
@@ -7407,14 +7410,13 @@ The Lease Manager keeps the lease registry, the single source of truth for which
 **📐 How does a lease record relate to the group's checkout?**
 ```mermaid
 flowchart TB
-  REC["Registry record: group-id"] -->|"1 names"| BR["Group branch"]
   REC -->|"1 names"| WT["Worktree path"]
   REC -->|"2 holds"| FN["Fence number"]
   RM["Runtime Manager"] -->|"3 Grant, Renew, Revoke"| REC
   CALLER["Any part, when asked"] -->|"4 IsOwner"| REC
 ```
 
-1. The registry record names the branch and worktree that one holder owns.
+1. The registry record names the worktree that one holder owns.
 2. The record carries the fence number.
 3. The Runtime Manager grants, renews and revokes the record.
 4. A caller asks whether a lease still owns the group; the answer is read from the record.
@@ -7501,12 +7503,11 @@ const (
 	StateRevoked  LeaseState = "revoked"  // ended on order; the holder is no longer the owner
 )
 
-// Lease is one registry record: the run that owns a group's branch and worktree.
+// Lease is one registry record: the run that owns a group's worktree.
 type Lease struct {
 	Repo      string     `json:"repo"`       // repo id
 	Group     string     `json:"group"`      // task group id
 	Run       string     `json:"run"`        // run that holds the group
-	Branch    string     `json:"branch"`     // the group's branch name, as the caller gave it
 	Worktree  string     `json:"worktree"`   // absolute path of the group's worktree
 	PID       int        `json:"pid"`        // process id of the holder
 	ProcStart time.Time  `json:"proc_start"` // start time of the holder's process
@@ -7525,7 +7526,6 @@ type Lease struct {
   "repo": "github.com/acme/shop",
   "group": "0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
-  "branch": "<group branch>",
   "worktree": "/Users/dev/.komodo/wt/github.com-acme-shop/0198f3a2-7a10-7d3e-9b2f-6c1d8e4a5f30",
   "pid": 48213,
   "proc_start": "2026-10-14T09:12:40Z",
@@ -7542,7 +7542,7 @@ type Lease struct {
 | Field | Rule |
 |---|---|
 | `repo`, `group` | Together the registry key; one record per group |
-| `branch`, `worktree` | No two live records name the same branch or the same worktree path |
+| `worktree` | No two live records name the same worktree path |
 | `pid`, `proc_start` | On the same machine a lease is live while this process exists and started at this time; a reused process id with a different start time is a different process. A holder whose start time is unknown (the zero time) is judged by its last renewal against `LeaseExpiry`, never by its process id alone |
 | `host` | The machine id of the holder; the process check runs only when it equals this machine's id, so a changed network host name never splits liveness. A home folder shared by several machines or containers is unsupported, and the engine refuses to start on a network disk or a failed test lock, the same tests as `doctor` |
 | `clone_path` | The sweep removes a record whose clone is gone |
@@ -7550,7 +7550,7 @@ type Lease struct {
 | `rev` | Every registry write names the `rev` it read; a stale `rev` is refused |
 | `taken_at`, `renewed_at` | RFC 3339 in UTC to the second; renewal rewrites `renewed_at` only |
 
-The branch name is open [TODO: the group branch name ([G-330](#g-330))], and the caller of `Grant` passes it in. The record names the group's own branch only; the epic's shared branch, `komodo/<epic>`, has no lease.
+The record names the group's detached worktree and no branch; the plan's feature branch, `komodo/<epic>`, has no lease.
 
 #### Liveness
 
@@ -7611,7 +7611,6 @@ type GrantRequest struct {
 	Repo      string // repo id
 	Group     string // task group id
 	Run       string // run asking
-	Branch    string // branch name the lease records for the group
 	Worktree  string // worktree path the lease records for the group
 	ClonePath string // clone the run started from
 }
@@ -7651,7 +7650,7 @@ var (
 	ErrNotFound    = errors.New("lease record does not exist")
 	ErrLeased      = errors.New("group is leased by another run")         // Grant: a live holder exists
 	ErrLeaseLost   = errors.New("lease lost: another run took the group")
-	ErrBranchTaken = errors.New("branch or worktree is owned by another group")
+	ErrWorktreeTaken = errors.New("worktree is owned by another group")
 	ErrBadKey      = errors.New("repo or group id cannot name a file")
 	ErrLocked      = errors.New("lease record stayed locked by another writer") // a lock stayed held past twice the lock timeout
 )
@@ -7677,7 +7676,7 @@ func New(home string, lockTimeoutS any, reg Registry, alive ProcessCheck) (*Mana
 // The caller reads the key and passes its value to New.
 func LockTimeout(seconds any) time.Duration
 
-// Grant takes the group's lease, raises the fence and records the branch and worktree names.
+// Grant takes the group's lease, raises the fence and records the worktree path.
 func (m *Manager) Grant(ctx context.Context, req GrantRequest) (Lease, error)
 
 // Renew rewrites renewed_at; ErrLeaseLost means another run holds the group.
@@ -7702,7 +7701,7 @@ func (m *Manager) Sweep(ctx context.Context, repo string) (SweepReport, error)
 | Method | Error means | Caller does |
 |---|---|---|
 | `Grant`, `HeldError` | A live run holds the group | Runtime Manager does not start the group and names the holder |
-| `Grant`, `ErrBranchTaken` | Another group's live lease names the branch or worktree | Runtime Manager reports the clash to the Error Handler |
+| `Grant`, `ErrWorktreeTaken` | Another group's live lease names the worktree | Runtime Manager reports the clash to the Error Handler |
 | `Renew`, `ErrLeaseLost` | Another run took the group, or the lease was revoked | Runtime Manager stops the group in this run |
 | `IsOwner`, `false` | Another run holds the group, or the lease was revoked | The asking part treats the lease as lost |
 
@@ -7728,14 +7727,14 @@ flowchart TD
   B -->|"4 yes, dead: Swap"| D["Record: held, fence + 1"]
 ```
 
-1. Check that no other live lease names the branch or worktree path; `ErrBranchTaken` otherwise.
+1. Check that no other live lease names the worktree path; `ErrWorktreeTaken` otherwise.
 2. No record: `Create` one in state `held` with fence 1 and the holder's process id and start time. Exactly one caller wins.
 3. A record whose holder is live (see [Liveness](#93-data-model)) returns `HeldError` naming it.
 4. A dead record: `Swap` it, naming the `rev` read, into a `held` record with the fence raised by 1. Only one taker succeeds; the loser gets `ErrStaleRev`, rereads and finds a live holder.
 
 Before step 1, `Grant` takes the repository's grant lock (`RepoLocker`) and the group's in-process mutex. The holder's process id, start time and host name are the Manager's own, read when `New` ran; `GrantRequest` carries none of them. The grant lock makes step 1 and step 2 or 4 one step across processes, so two groups never both get one branch.
 
-The Task Manager creates the branch and worktree the record names, after `Grant` returns. The Lease Manager never creates them.
+The Task Manager creates the worktree the record names, after `Grant` returns. The Lease Manager never creates them.
 
 #### The first record carries the right fence
 
@@ -7824,7 +7823,7 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 
 #### Invariants
 
-1. At most one live lease exists per group, and no two live leases name one branch or worktree path.
+1. At most one live lease exists per group, and no two live leases name one worktree path.
 2. The fence never falls while the record exists.
 3. No caller supplies a fence number; it comes from the `Lease` that `Grant` returned.
 4. The Lease Manager performs no git write; agents never touch git.
@@ -7842,7 +7841,7 @@ After each move, `Held` means exactly one run is the owner, with the current fen
 | Laptop slept, process alive | Process check passes | Lease stays live; no takeover | Same holder |
 | Holder alive but not renewing | No renewal for `LeaseExpiry` | Runtime Manager kills the process tree, then `Revoke` | Revoked |
 | Stalled holder wakes after takeover | `IsOwner` or `Renew` | `false` or `ErrLeaseLost` | Stale run stops |
-| Branch name already used by another group | Step 1 of the grant | `ErrBranchTaken` | Absent |
+| Worktree path already used by another group | Step 1 of the grant | `ErrWorktreeTaken` | Absent |
 | Clone path gone | Sweep | Delete the record | Absent |
 | Writer died holding a lock | None needed | The kernel freed the lock with the process; the next writer takes it at once | Record whole |
 | Group paused at a limit | The Runtime Manager's pause | The lease stays held and is renewed | Held |
@@ -7869,7 +7868,7 @@ Tests use a temporary directory; no network, no git and no live provider.
 - A reused process id with a different start time counts as dead.
 - `IsOwner` returns false for a revoked lease and for a lease with a lower fence.
 - `IsOwner` returns true for the lease that `Grant` returned.
-- `ErrBranchTaken` when a second group names a live group's branch.
+- `ErrWorktreeTaken` when a second group names a live group's worktree.
 - The sweep deletes a record whose clone is gone and never touches a live lease.
 - A lock file with an old modification time but a live holder is not taken over; the writer waits and then fails with `ErrLocked` after `lease.lock_timeout_s`.
 - A held lock makes a second writer wait; it writes once the first releases (child-process tests in `internal/core` show that a killed holder frees the lock at once and a stopped holder never loses it).
@@ -7907,7 +7906,7 @@ The State Manager is the one place a task group's runtime state is read and writ
 - Being the only record recovery reads: a group continues from its saved state.
 
 **Does not own:**
-- Leases, the fence and the branch and worktree names the lease records: [Lease Manager](#9-lease-manager). The record keeps only a copy of the fence.
+- Leases, the fence and the worktree path the lease records: [Lease Manager](#9-lease-manager). The record keeps only a copy of the fence.
 - Cached results: [Cache Manager](#8-cache-manager).
 - The event shape and delivery: [Event Bus](#4-event-bus).
 - The event log. The State Manager keeps none; the [Event Bus](#4-event-bus) appends every event to its event store, which replay and the Metrics Service read.
@@ -8188,7 +8187,7 @@ const (
 	ReasonContext       Reason = "context"        // the brief exceeds half the context of every link
 	ReasonSetup         Reason = "setup"          // the group could not start: lease, worktree or sandbox
 	ReasonPublish       Reason = "publish"        // push or pull request failed
-	ReasonMergeConflict Reason = "merge_conflict" // the group's branch conflicts with its base
+	ReasonMergeConflict Reason = "merge_conflict" // the group's work conflicts with its base
 	ReasonCleanup       Reason = "cleanup"        // cleanup could not remove what it must
 	ReasonWall          Reason = "wall"           // working time reached twice limits.group_wall_min
 	ReasonDependency    Reason = "dependency"     // a dependency was removed from the run
@@ -8764,14 +8763,14 @@ No open gaps.
 
 ## 11. Task Manager
 
-The Task Manager is the controller of one task group. It runs as one goroutine, a lightweight thread inside one Go program, in the engine, which is the Runtime Manager's process. It runs the group from Build to Cleanup, creates the group's branch and worktree, guards every action its agents request, opens the group's model sessions through the model client, and creates and destroys the group's sandbox instances. It also talks to the Runtime Manager in both directions: it receives commands, escalates blockers, asks for more time, and reports state. This chapter covers the Task Manager (`internal/task`) and the two adapters it owns: the model client (`internal/llm`) and the test sandbox (`internal/sandbox`). The purpose and interactions are in [HLD 5.12](hld.md#512-task-manager).
+The Task Manager is the controller of one task group. It runs as one goroutine, a lightweight thread inside one Go program, in the engine, which is the Runtime Manager's process. It runs the group from Build to Cleanup, creates the group's detached worktree, guards every action its agents request, opens the group's model sessions through the model client, and creates and destroys the group's sandbox instances. It also talks to the Runtime Manager in both directions: it receives commands, escalates blockers, asks for more time, and reports state. This chapter covers the Task Manager (`internal/task`) and the two adapters it owns: the model client (`internal/llm`) and the test sandbox (`internal/sandbox`). The purpose and interactions are in [HLD 5.12](hld.md#512-task-manager).
 
 ### 11.1 Scope and Concepts
 
 **Owns:**
 - The pipeline of one task group: Build, then Test and Review in parallel, then Commit, then Cleanup, with the rework loop back to the builder.
 - The two-way link with the Runtime Manager: a command channel down and a reply channel up. Over the reply channel it escalates, asks for a timer extension and reports state.
-- The group's branch and worktree, created at the names the lease records, and a local commit after each finished task, which the Task Manager asks the Commit Handler to make without a push.
+- The group's detached worktree, created at the path the lease records, and a local commit after each finished task, which the Task Manager asks the Commit Handler to make without a push.
 - The session supervisor: it starts, watches and stops each model session and records one exit reason.
 - The guard and the tool runtime: every agent action is checked against the agent's permissions, and refused by default.
 - Link choice and failover for each session: the chain, the billing decision and the hand-off of a provider limit.
@@ -8892,7 +8891,7 @@ type GroupSpec struct {
 	Group      string                 // task group label, such as tg-2
 	Tasks      []TaskSpec             // tasks in order
 	Files      []string               // the group's file globs; the builder writes only here
-	Lease      LeaseRef               // branch, worktree and git folder the lease records
+	Lease      LeaseRef               // worktree and git folder the lease records
 	Agents     map[string]Permissions // permissions per agent role
 	Servers    []OutsideServer        // outside tool servers switched on for at least one agent
 	Limits     Limits                 // session clocks, returns, refusals, attempts
@@ -8909,7 +8908,6 @@ type TaskSpec struct {
 
 // LeaseRef is the lease's record for one group.
 type LeaseRef struct {
-	Branch   string `json:"branch"`
 	Worktree string `json:"worktree"` // absolute path
 	GitDir   string `json:"git_dir"`  // this worktree's own git folder, absolute path
 	Fence    int64  `json:"fence"`    // rising number that proves the lease is current
@@ -8950,7 +8948,7 @@ A group that needs another pass, such as one fixed by hand in its worktree, cont
   "run": "0192e5a1-7c3e-7b1a-9d4e-5f2a8c1b3d60",
   "group": "tg-2",
   "files": ["internal/lease/**"],
-  "lease": {"branch": "<group branch>", "worktree": "/home/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22",
+  "lease": {"worktree": "/home/dev/.komodo/wt/shop/0192e5a1-7d20-7c10-8a31-5b0e9d4c6f22",
             "git_dir": "/home/dev/src/shop/.git/worktrees/tg-2", "fence": 7},
   "agents": {"builder": {"tools": ["read", "search", "edit", "write", "run", "skill", "task_done"],
                          "run_classes": ["build", "test", "lint", "format"], "guard": ["R1", "B1"], "servers": [],
@@ -9955,7 +9953,7 @@ type Git interface {
 	Diff(ctx context.Context, l LeaseRef, paths []string) (string, error)
 	ReadOnly(ctx context.Context, l LeaseRef, command string, args []string) (string, error) // log, show, blame, status
 	ResetTracked(ctx context.Context, l LeaseRef) error // restores changed tracked files; removes untracked, non-ignored files
-	AddWorktree(ctx context.Context, l LeaseRef) error  // creates l.Branch and checks it out at l.Worktree, through core.Git.AddWorktree (15.4)
+	AddWorktree(ctx context.Context, l LeaseRef) error  // creates a detached worktree at l.Worktree, at the tip of the plan's feature branch, through core.Git.AddWorktree (15.4)
 }
 
 // Committer is the Commit Handler as the Task Manager sees it.
@@ -10206,14 +10204,14 @@ flowchart TB
   W -->|"10"| B
 ```
 
-1. `Run` creates the group's branch and worktree at the names the lease records, through `Git.AddWorktree`, unless the worktree already exists. It records the `.git` pointer, runs the setup command for the worktree, the only step with network access, then enters Build. The branch starts from the tip of the epic's branch `komodo/<epic>`, which the Runtime Manager made sure exists and holds the plan and all landed work before this step ([7.5](#75-behaviour)).
+1. `Run` creates the group's detached worktree at the path the lease records, through `Git.AddWorktree`, unless the worktree already exists. It records the `.git` pointer, runs the setup command for the worktree, the only step with network access, then enters Build. The worktree starts at the tip of the plan's feature branch `komodo/<epic>`, which the Runtime Manager made sure exists and holds the plan and all landed work before this step ([7.5](#75-behaviour)).
 2. Build ends with the builder's result judged `pass`. After each finished task the Task Manager has already asked the Commit Handler to save a local commit (`Committer.Save`), which does not push. The pipeline then runs the mechanical checks.
 3. The checks run as Go code in Quality Assurance's sandbox. Only a clean result starts Quality Assurance and the reviewer together; each ends with an `Outcome`. The pipeline waits for both, unless the reviewer returns first (rework rules).
 4. A failed check goes straight back to Build with the exact output, and no model is called ([Checks before the sessions](#115-behaviour)).
 5. Both roles `pass`; a group of risk level `low` or `med_low` skips the reviewer, and Quality Assurance alone must pass.
 6. The pipeline calls `Committer.Publish` (`Committer.Quarantine` for a group of risk level `high` or `critical`). The Commit Handler squashes the group onto its epic's branch locally, one group at a time per epic, and rechecks that branch. A failed recheck pauses landings on that epic until it passes. When the last group of the epic lands, the Commit Handler pushes once and opens one pull request for the epic, and a person merges it.
 7. The Commit Handler then calls the Cleanup Handler ([chapter 15](#15-commit-handler)). The Task Manager does not call it.
-8. The Cleanup Handler removes the group's branch and worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
+8. The Cleanup Handler removes the group's worktree and calls only `CloseTaskGroup()` on this Task Manager. Inside it the Task Manager calls `DestroySandboxInstance()`, reports stage `cleanup` closed, and `Run` returns. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
 9. If either role returned, the pipeline runs the rework check.
 10. Inside the bound, the builder receives the findings and the group re-enters Build.
 
@@ -10971,7 +10969,6 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | Gap | Question | Touches |
 |---|---|---|
 | [G-264](#g-264) | An egress proxy that limits an outside server to its listed hosts | Outside tool servers |
-| [G-330](#g-330) | The group branch name | Branch and worktree |
 | [G-02](#g-02) | Capturing the `system/init` line at probe time without a model turn | Billing check |
 | [G-08](#g-08) | A private loopback per instance | Sandbox |
 | [G-09](#g-09), [G-10](#g-10), [G-11](#g-11), [G-12](#g-12), [G-25](#g-25) | Quality Assurance copy mechanisms and costs | Sandbox |
@@ -11003,7 +11000,7 @@ The Builder is the agent that writes the code of one task group. It works task b
 - The prompt text, skills and the filling of brief slots: [Context Manager](#6-context-manager).
 - The agent registry entry (model, link chain, limits): [Configuration Manager](#3-configuration-manager).
 - The return counter, attempt counter, retry loops and group clocks: [Runtime Manager](#7-runtime-manager).
-- Lease records: [Lease Manager](#9-lease-manager). Creating the group's branch and worktree: [Task Manager](#11-task-manager).
+- Lease records: [Lease Manager](#9-lease-manager). Creating the group's worktree: [Task Manager](#11-task-manager).
 - Judging the work under test: [Quality Assurance](#13-quality-assurance) and [Reviewer](#14-reviewer). Saving each finished task as a local commit and pushing the approved work: [Commit Handler](#15-commit-handler).
 
 **Concepts**
@@ -11018,7 +11015,7 @@ The Builder is the agent that writes the code of one task group. It works task b
 | File list | The paths the group may change: the group's `files` in the plan, plus any scope the orchestrator approved. |
 | Test sibling | A test file in the folder of a file in the file list, such as `lock_test.go` beside `lock.go`. |
 | Scope request | The Builder's stop with status `needs_scope`, naming the paths it needs and why. |
-| Local commit | A commit on the group's branch that is not pushed; the Commit Handler makes it when the Task Manager asks. |
+| Local commit | A commit in the group's detached worktree that is not pushed; the Commit Handler makes it when the Task Manager asks. |
 | Operating-system sandbox | Seatbelt on macOS, the built-in tool that confines a program to chosen files and network access, or Bubblewrap on Linux, a tool that runs a command in a locked-down view of the machine. |
 
 ### 12.2 Package Layout
@@ -11340,7 +11337,7 @@ sequenceDiagram
 4. For any other path the Task Manager tells the Runtime Manager that the group waits on a scope answer, with reason `needs_scope`.
 5. The orchestrator learns of the question through `komodo status --wait`, which returns the blocked group's question: the paths and the reason.
 6. It answers with `komodo run (id) --approve`, which grants the requested paths, or `komodo run (id) --deny`, which refuses them. Whether `--deny` carries a reason text for the Builder is [TODO: whether `--deny` carries a reason text ([G-266](#g-266))].
-7. The Runtime Manager passes the answer to the Task Manager through its command channel. An approval adds the paths to the group's added-scope list in the runtime state, so the plan never changes; the effective file list is the group's `files` in the plan plus that list.
+7. The Runtime Manager passes the answer to the Task Manager of each blocked group it reaches through its command channel. An approval adds the paths to the group's added-scope list in the runtime state, so the plan never changes; the effective file list is the group's `files` in the plan plus that list.
 8. The Task Manager rewrites the guard's effective file list from the runtime state, then resumes the same session with the answer in `scope_answer`. It repeats the rewrite on every resume.
 
 After a denial the Builder finishes the task inside the file list; a task it cannot finish fails its completion command and takes the usual retry path.
@@ -13129,11 +13126,11 @@ The Commit Handler owns four things: the local save of a finished task, the publ
 |---|---|
 | Approval | The hand-over from the Task Manager: the work, named by its tree hash, that Quality Assurance and, at level medium or above, the Reviewer approved |
 | Tree hash | A short fingerprint of every file's content in a commit or worktree; equal hashes mean equal content |
-| Group branch | The branch for the group, named as [TODO: the group branch name ([G-330](#g-330))]; the Task Manager creates it together with the group's worktree |
-| Epic branch | The one shared branch of an epic, named `komodo/<epic>`, such as `komodo/plan-7f3a9c`; every group of the epic lands on it, and it is the head of the epic's pull request |
-| Save | A local commit of a finished task's work on the group branch; it is never pushed |
+| Group worktree | The detached git checkout where one group works; it has no branch, and the Task Manager creates it |
+| Epic branch | The plan's feature branch, named `komodo/<epic>`, such as `komodo/plan-7f3a9c`; every group of the plan lands on it, and it is the head of the plan's one pull request |
+| Save | A local commit of a finished task's work in the group's worktree; it is never pushed |
 | Landing | Squashing one approved group into the epic branch as one local commit; one group at a time per epic. Nothing is pushed by a landing |
-| Quarantine | The route of a group of risk level `high` or `critical`: its own branch from the epic branch, pushed once, with a draft pull request into the epic branch and no CI |
+| Quarantine | The route of a group of risk level `high` or `critical`: its own draft pull request and no CI [TODO: how the quarantine route works when a group has no branch of its own ([G-330](#g-330))] |
 | Deferred group | A group that waits on a quarantined group's work; it is not blocked and starts when the quarantine is merged |
 | Push budget | One push per pull request: the epic branch once after its last landing, and each quarantine branch once |
 | Recheck | The checks that call no model, run on the epic branch after each landing |
@@ -13153,8 +13150,8 @@ What the Commit Handler guarantees:
 What lies beside it:
 - Quality Assurance and the Reviewer judge the work; the Commit Handler never re-judges it.
 - The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
-- The Task Manager creates each group's branch and worktree and calls `Save` after each finished task; the Cleanup Handler removes them ([chapter 16](#16-cleanup-handler)).
-- The Commit Handler commits no plan: plans live outside the repository, and the pull request carries only group titles, as `<label>: <goal>`. [TODO: how a lasting record of task groups, such as a changelog anchor, is kept ([G-323](#g-323))] [TODO: how the epic branch reaches the remote when a quarantine needs it ([G-307](#g-307))]
+- The Task Manager creates each group's detached worktree and calls `Save` after each finished task; the Cleanup Handler removes them ([chapter 16](#16-cleanup-handler)).
+- The Commit Handler commits no plan: plans live outside the repository. The plan's pull request carries a high-level summary of the plan, all the changes and a changelog reference. [TODO: how a lasting record of task groups, such as a changelog anchor, is kept ([G-323](#g-323))] [TODO: how the epic branch reaches the remote when a quarantine needs it ([G-307](#g-307))]
 - No command reaches the Commit Handler. `komodo run (id)` continues a group, and only a group with the approvals its level requires publishes; `replay` changes nothing.
 
 ### 15.2 Package Layout
@@ -13172,7 +13169,7 @@ The Go package is `internal/commit` (phase 6 of the build order in HLD Appendix 
 | `internal/commit/message.go` | The commit message form and the check that it carries no trailer |
 | `internal/commit/body.go` | `RenderBody` and `RenderEpicBody`: the Commit Handler's own body templates, filled from recorded facts |
 
-The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface (the Cleanup Handler's is in [16.4](#164-interfaces)); one `core.Git` value, created once at start-up, satisfies them, and a test in `internal/integration` asserts it at compile time. The Task Manager, which creates each group's branch and worktree, uses the same value.
+The git wrapper itself lives in `internal/core/git.go`, so a package below `internal/commit` can use it without importing this one. The Commit Handler and the Cleanup Handler (which deletes local branches and removes worktrees) declare the few `Git` methods they need as their own small interface (the Cleanup Handler's is in [16.4](#164-interfaces)); one `core.Git` value, created once at start-up, satisfies them, and a test in `internal/integration` asserts it at compile time. The Task Manager, which creates each group's worktree, uses the same value.
 
 **Entry points**
 
@@ -13196,13 +13193,12 @@ type SaveRequest struct {
 	Label    string      `json:"label"`    // group label, such as tg-2
 	Task     string      `json:"task"`     // finished task name, such as tsk-fence-stale
 	Worktree string      `json:"worktree"` // path of the group's worktree
-	Branch   string      `json:"branch"`   // group branch
 	Fence    lease.Fence `json:"fence"`    // fence of the lease the Task Manager holds
 }
 
 // SaveResult is what Save returns.
 type SaveResult struct {
-	Head  string `json:"head"`  // commit id at the group branch tip after the save
+	Head  string `json:"head"`  // commit id at the worktree's HEAD after the save
 	Tree  string `json:"tree"`  // tree hash of that commit
 	Saved bool   `json:"saved"` // false when the tip already held the worktree's content
 }
@@ -13216,14 +13212,12 @@ type SaveResult struct {
   "label": "tg-2",
   "task": "tsk-fence-stale",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "branch": "<group branch>",
   "fence": 3
 }
 ```
 
 | Field | Rule |
 |---|---|
-| `branch` | Must start with `komodo/`; the wrapper refuses any other name |
 | `fence` | Must equal the lease's fence when `Save` runs |
 
 #### Approval
@@ -13247,7 +13241,6 @@ type Approval struct {
 	EpicGroups []string    `json:"epic_groups"` // labels of every group of the epic
 	Goal       string      `json:"goal"`        // the group goal; title of the commit
 	Worktree   string      `json:"worktree"`    // path of the group's worktree
-	Branch     string      `json:"branch"`      // group branch
 	Fence      lease.Fence `json:"fence"`       // fence of the lease the Task Manager holds
 	Tree       string      `json:"tree"`        // tree hash the approving agents judged
 	QA     Verdict     `json:"qa"`
@@ -13261,7 +13254,6 @@ type Approval struct {
 | `tree` | Must equal `qa.tree` and `reviewer.tree`; a difference is `ErrNotApproved`. Must also equal the worktree's tree hash when the commit step runs. A group of level `low` or `med_low` has no Reviewer verdict, so `reviewer.tree` is empty and not compared |
 | `level`, `reason` | Set by Go's `Classify`; The Task Manager sends `low` to `med_high` to `Publish` and `high` and `critical` to `Quarantine` |
 | `fence` | Must equal the lease's fence when read just before the push |
-| `branch` | Must start with `komodo/`; the wrapper refuses any other name |
 | `epic_groups` | Every group label of the epic; the epic's last landing is the one after which each label has landed |
 | `facts` | Supplied by the Task Manager from recorded results; the handler never reruns a test |
 
@@ -13275,7 +13267,6 @@ type Approval struct {
   "epic_groups": ["tg-1", "tg-2"],
   "goal": "Add the lease registry",
   "worktree": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
-  "branch": "<group branch>",
   "fence": 3,
   "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4",
   "qa": { "tree": "c41d7e9a2b0f5836d1e4a7c9b2f03e86a5d1c7b4", "summary": ["14 tests pass", "0 regressions"] },
@@ -13297,7 +13288,7 @@ type PRFacts struct {
 }
 ```
 
-The group template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `QA` and `Reviewer`; no model writes any of its words. `RenderBody` renders one group's section, which the landing keeps in the group's merge commit message, and `RenderEpicBody` joins the sections of every landed group into the epic's pull request body. The body and the squash message name a group only as `<label>: <goal>`; no task name appears in either.
+The group template is a constant in `body.go`, filled by Go's `text/template` from a value holding `Facts`, `QA` and `Reviewer`; no model writes any of its words. `RenderBody` renders one group's section, which the landing keeps in the group's merge commit message, and `RenderEpicBody` renders the plan's pull request body from the plan summary, the sections of every landed group and the changelog reference. The plan's pull request body holds a high-level summary of the plan, which is the plan's goal and each group's goal, then all the changes, then a changelog reference [TODO: how the changelog is anchored ([G-323](#g-323))]. No task name appears in the body or in a squash message.
 
 ```go
 // bodyTemplate is one group's section of the pull request body; every value comes from the facts and the two verdicts.
@@ -13316,18 +13307,28 @@ const bodyTemplate = `## Summary
 ```
 
 ```go
-// EpicFacts are the facts the epic pull request body renders.
+// EpicFacts are the facts the plan's pull request body renders.
 type EpicFacts struct {
-	DiffStat string     `json:"diff_stat"` // git's diff stat of the epic branch against the base branch
-	Groups   []string   `json:"groups"`    // one section per landed group, in landing order, as RenderBody wrote it
+	Goal       string   `json:"goal"`        // the plan's goal
+	GroupGoals []string `json:"group_goals"` // one line per group of the plan, as "<label>: <goal>"
+	DiffStat   string   `json:"diff_stat"`   // git's diff stat of the feature branch against the base branch
+	Groups     []string `json:"groups"`      // one section per landed group, in landing order, as RenderBody wrote it
+	Changelog  string   `json:"changelog"`   // the changelog reference [TODO: how the changelog is anchored ([G-323](#g-323))]
 }
 
-// epicBodyTemplate is the epic pull request body; every value comes from EpicFacts.
+// epicBodyTemplate is the plan's pull request body; every value comes from EpicFacts.
 const epicBodyTemplate = `## Summary
+{{.Goal}}
+
+{{range .GroupGoals}}- {{.}}
+{{end}}
+## Changes
 {{.DiffStat}}
 
 {{range .Groups}}{{.}}
-{{end}}`
+{{end}}
+## Changelog
+{{.Changelog}}`
 ```
 
 #### Result
@@ -13400,7 +13401,7 @@ type Handler struct {
 	Live    func() Settings // when set, read at each use in place of Config
 }
 
-// Save records a finished task's work as a local commit on the group branch; it never pushes.
+// Save records a finished task's work as a local commit in the group's worktree; it never pushes.
 func (h *Handler) Save(ctx context.Context, r SaveRequest) (SaveResult, error)
 
 // Publish commits the approved tree and squashes it onto the epic branch locally, then hands the group to the Cleanup Handler; it pushes nothing.
@@ -13542,9 +13543,9 @@ type Git interface {
 	Head(ctx context.Context, worktree string) (commit, tree string, err error)
 	// Info describes one commit of the worktree: its id, tree, parents and subject.
 	Info(ctx context.Context, worktree, rev string) (CommitInfo, error)
-	// CurrentBranch returns the komodo/ branch the worktree has checked out.
+	// CurrentBranch returns the branch the worktree has checked out; it is empty for a detached worktree.
 	CurrentBranch(ctx context.Context, worktree string) (string, error)
-	// Commit records the worktree's content as one commit on the checked-out branch and returns its id.
+	// Commit records the worktree's content as one commit on the worktree's HEAD and returns its id.
 	Commit(ctx context.Context, worktree, message string) (commit string, err error)
 	// Push pushes one komodo/ branch to its own name on the remote, with a plain push.
 	Push(ctx context.Context, worktree, remote, branch string) error
@@ -13556,7 +13557,7 @@ type Git interface {
 	Squash(ctx context.Context, dir, ref, message string) (head string, err error)
 	// IsAncestor reports whether anc is in the history of desc, or equal to it.
 	IsAncestor(ctx context.Context, dir, anc, desc string) (bool, error)
-	// AddWorktree adds a worktree at path on a komodo/ branch cut from base, creating the branch when it does not exist.
+	// AddWorktree adds a worktree at path; with a branch it checks that komodo/ branch out, creating it from base when it does not exist, and with an empty branch it detaches at base.
 	AddWorktree(ctx context.Context, clone, path, branch, base string) error
 	// RemoveWorktree removes a worktree and refuses when it holds files the tip lacks.
 	RemoveWorktree(ctx context.Context, clone, path string) error
@@ -13595,7 +13596,7 @@ type Landing struct {
 }
 ```
 
-`core.Git` also carries the methods the Cleanup Handler calls: `DeleteBranch`, `DeleteLanded`, `DiscardBranch`, `DiscardWorktree`, `BranchTip`, `Fetch` (every branch of the remote, never pruning) and `Holds` (reads the remote-tracking references only). A refusal it makes on purpose (`ErrCriticalRef`, `ErrDirty`, `ErrTipMoved`, `ErrNotContained`, `ErrForce`) answers `Refused() bool` with true.
+`core.Git` also carries the methods the Cleanup Handler calls: `DeleteBranch`, `DiscardWorktree`, `BranchTip`, `Fetch` (every branch of the remote, never pruning) and `Holds` (reads the remote-tracking references only). A refusal it makes on purpose (`ErrCriticalRef`, `ErrDirty`, `ErrForce`) answers `Refused() bool` with true.
 
 | Method | Error means | Caller does |
 |---|---|---|
@@ -13604,9 +13605,8 @@ type Landing struct {
 | `Push`, other error | Network or authentication failure | Kind `push`, retryable |
 | `Merge` with `ErrConflict` | The merge conflicts | Kind `merge_conflict`, not retryable |
 | `FetchBranch`, error | The branch is missing, or the network failed | Kind `base_missing` when the remote lacks the branch; otherwise kind `push`, retryable |
-| `DeleteLanded` (Cleanup Handler) | The tip moved (`ErrTipMoved`), or `containedIn` holds neither the tip nor a commit with the group's identical change (`ErrNotContained`) | Nothing is deleted; the Cleanup Handler reports the branch as kept ([16.4](#164-interfaces)) |
 
-`Merge`, `FetchBranch`, `Landed`, `IsAncestor` and `DiffStat` serve the epic landing (15.5). `Info` and `IsAncestor` let `Publish` recognise a group branch that already merged the epic branch, and `CurrentBranch` checks the worktree is on the approved group branch. `DefaultBranch` and `UpstreamRemote` resolve an empty `commit.base_branch` and `commit.remote` (15.5, Base branch). `Commit` returns the current tip, with no new commit, when the worktree's tree already equals the tip's tree. `AddWorktree` is also called by the Task Manager for a group's own worktree. `DeleteBranch`, `DiscardBranch` and `RemoveWorktree` are also called by the Cleanup Handler through its own interface.
+`Merge`, `FetchBranch`, `Landed`, `IsAncestor` and `DiffStat` serve the epic landing (15.5). `Info` and `IsAncestor` let `Publish` recognise a worktree commit that already merged the epic branch, and `CurrentBranch` checks the group's worktree is detached. `DefaultBranch` and `UpstreamRemote` resolve an empty `commit.base_branch` and `commit.remote` (15.5, Base branch). `Commit` returns the current tip, with no new commit, when the worktree's tree already equals the tip's tree. `AddWorktree` is also called by the Task Manager for a group's own worktree. `DeleteBranch` and `RemoveWorktree` are also called by the Cleanup Handler through its own interface.
 
 #### The forge wrapper
 
@@ -13633,7 +13633,7 @@ type Forge interface {
 `RenderEpicBody` fills the body that `OpenPR` and `UpdatePR` send:
 
 ```go
-// RenderEpicBody fills the epic pull request body template with the epic's facts.
+// RenderEpicBody fills the plan's pull request body template with the plan's facts.
 func RenderEpicBody(f EpicFacts) (string, error)
 ```
 
@@ -13646,7 +13646,7 @@ There is no merge method: a person merges the pull request. The label is made wi
 1. After each finished task, the Task Manager calls `Save` on its own goroutine for the group.
 2. `Save` reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`.
 3. It takes the worktree's tree hash with `TreeOf`. When the checked-out commit already has that tree, nothing is committed and `Saved` is false.
-4. Otherwise `Commit` records the content with the message `<label>: <task>`, refusing a branch outside `komodo/` with `ErrCriticalRef` and a message that ends in `Name: value` lines.
+4. Otherwise `Commit` records the content with the message `<label>: <task>`, refusing a message that ends in `Name: value` lines.
 5. `Save` returns the new tip and tree. It never pushes, never calls the forge and never reaches the Cleanup Handler.
 
 #### Publish
@@ -13668,15 +13668,15 @@ flowchart TB
 ```
 
 1. The Task Manager reports `group.approved` through the Runtime Manager, then calls `Publish`. This event is what asked for the commit, so a commit never happens without one. The event has no body; the commit in git is the record of the code.
-2. `Publish` refuses with `ErrNotApproved` unless `tree` and `qa.tree` are equal, and `reviewer.tree` too at level medium or above. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`. It refuses with `ErrCriticalRef` when the group branch or the epic branch is the base branch.
-3. `Publish` requires the worktree to have `branch` checked out (`CurrentBranch`; any other branch is `ErrNotApproved`). It takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`, except on a repeat: a clean worktree whose tip is a merge commit with the subject `<label>: merge <epic>` and a second parent the remote epic branch holds, over a commit with the tree `tree`, is accepted as the group's own sync with the epic. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
+2. `Publish` refuses with `ErrNotApproved` unless `tree` and `qa.tree` are equal, and `reviewer.tree` too at level medium or above. It reads the lease through `Leases.Holder` and refuses with `ErrLeaseLost` unless the lease names this run and the fence equals `fence`. It refuses with `ErrCriticalRef` when the epic branch is the base branch.
+3. `Publish` requires the group's worktree to be detached (`CurrentBranch` is empty; a checked-out branch is `ErrNotApproved`). It takes the tree hash of the worktree with `TreeOf`; a value other than `tree` is `ErrNotApproved`, except on a repeat: a clean worktree whose tip is a merge commit with the subject `<label>: merge <epic>` and a second parent the remote epic branch holds, over a commit with the tree `tree`, is accepted as the group's own sync with the epic. When the checked-out commit already has that tree, because `Save` recorded it, nothing is committed. Otherwise `Commit` records the content with the message `<label>: <goal>`.
 4. `Epics.Enter` waits for the epic's turn. The next steps run inside the turn, so one group at a time lands on an epic. The first turn on an epic after the engine starts runs the recheck (step 6) before the landing, so a pause the restart forgot is found again; a group that has already landed skips it, because step 6 then runs on the same tip.
-5. The landing squashes, as the epic landing steps below describe, and never rebases. The group branch squashes into the epic branch by the commit id verified in step 3 and after the sync, never by a branch name. A conflict is `ErrConflict` and frees the turn with `Release`.
+5. The landing squashes, as the epic landing steps below describe, and never rebases. The worktree's commits squash into the epic branch by the commit id verified in step 3 and after the sync, never by a branch name. A conflict is `ErrConflict` and frees the turn with `Release`.
 6. `Check.Recheck` runs on the local epic branch. A pass calls `Turn.Finish(true)`. A failure calls `Turn.Finish(false)`, reports `epic.paused` and returns `ErrRecheck`; the check result decides, so a failed `epic.paused` report is added to the error and does not change its kind.
 7. When every label in `epic_groups` appears in `Git.Landed`, this landing was the epic's last and `Result.Last` is true. `Publish` pushes nothing; the push is `PushEpic` (below).
 8. `PushEpic` takes the epic's turn with `Epics.Lock`, fetches the remote epic branch and merges it in, fetches the base branch, and lists the landings. With no landing it returns. Otherwise it reads `RemoteTip`, skips the push when the remote already holds the local tip, pushes the epic branch once, and fails unless the remote then holds the local tip. When every group has landed, `Done` names every group and the epic is not paused, `Forge.FindPR` looks for a pull request on the epic branch: if none exists, `OpenPR` opens one; if one exists and the push changed the branch, `UpdatePR` refreshes its body from `RenderEpicBody`. After that, when the epic is last and has a pull request, it calls `Cleaner.CompleteEpic`; a cleanup error goes into `EpicResult.CleanupError` and fails nothing. [TODO: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again ([G-308](#g-308))]
 9. `Report` sends `publish.done` with a `Result`. The Runtime Manager publishes `epic.pushed` after each `PushEpic` and `pr.opened` when `EpicResult.PRURL` is set ([7.5](#75-behaviour)). A person or the orchestrator waiting on a run wakes on `pr.opened`.
-10. `Publish` calls `Cleaner.Complete` with the group branch, its tip, the commit that holds the group's work (`landed`) and the local epic branch (`into`); the remote is not consulted. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. The Cleanup Handler deletes the group branch under the rule in [16.5](#165-behaviour).
+10. `Publish` calls `Cleaner.Complete` with the worktree's tip, the commit that holds the group's work (`landed`) and the local epic branch (`into`); the remote is not consulted. A cleanup error is returned unchanged, and a repeated `Publish` reaches it again. The Cleanup Handler removes the worktree under the rule in [16.5](#165-behaviour).
 
 Publish runs on the Task Manager's own goroutine for the group, never inside the Runtime Manager's event loop, so a slow network holds up one group only.
 
@@ -13699,9 +13699,9 @@ The sandbox side of rule 5, mounting `.git` read-only in every sandbox profile, 
 Every group lands on its epic's branch `komodo/<epic>`. Steps 4 to 7 of Publish do the following.
 
 1. Before the first merge, `Fetch` brings in the base branch. The epic branch exists locally, because the Runtime Manager created it at run start ([7.5](#75-behaviour)); `AddWorktree` checks out the epic branch in the landing worktree and `Merge` brings in the remote tip when the remote has one. [TODO: how the epic branch reaches the remote for a quarantine ([G-307](#g-307))] The landing worktree is `<epic>` inside `Settings.LandingRoot`, which defaults to the folder that holds the group's worktree and is set to the repository's landing folder by the binary, matching the Cleanup Handler's `Roots.Landings/<epic>`; a repeat finds it and adds nothing.
-2. In the group's worktree, `Merge` merges the epic branch into the group branch with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, on the group branch, and never on the epic branch.
-3. In the landing worktree, `Squash` merges the group branch into the epic branch as one new commit with a single parent. The commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later. When `Landed` already lists the group's label, steps 2 and 3 are skipped; this is how a repeated `Publish` avoids a second landing.
-4. A landing pushes nothing. The epic branch is pushed once, by the last landing (Publish step 7), and the group branch is never pushed unless the group is quarantined.
+2. In the group's worktree, `Merge` merges the epic branch into the worktree's HEAD with `noFF` false and the message `<label>: merge <epic>`. A conflict surfaces here, in the worktree, and never on the epic branch.
+3. In the landing worktree, `Squash` merges the worktree's commits into the epic branch as one new commit with a single parent. The commit's subject is `<label>: <goal>` and its body is the group's section from `RenderBody`, so `Landed` can read the group back later. When `Landed` already lists the group's label, steps 2 and 3 are skipped; this is how a repeated `Publish` avoids a second landing.
+4. A landing pushes nothing. The epic branch is pushed once, by the last landing (Publish step 7), and a group's worktree commits are never pushed.
 5. The Commit Handler asks the group's Task Manager to run the recheck on the local epic branch at the tip just landed, in the group's Docker container. The turn stays held until the recheck result is recorded in `Turn.Finish`.
 6. Only the epic's pull request targets the base branch. A group gets a pull request only through quarantine.
 
@@ -13716,7 +13716,7 @@ flowchart TB
 ```
 
 1. A failed recheck sets the epic's pause under the group that ran it. The waiting groups keep their place in the queue and take no action.
-2. A paused epic admits only the group that paused it. Its next landing merges the epic branch into the group branch again, so a fix made by hand on the epic branch is picked up, and its recheck is the next one.
+2. A paused epic admits only the group that paused it. Its next landing merges the epic branch into the worktree again, so a fix made by hand on the epic branch is picked up, and its recheck is the next one.
 3. The first passing recheck clears the pause and reports `epic.resumed`. Whatever made it pass counts.
 4. Groups of other epics are never touched.
 
@@ -13726,28 +13726,27 @@ No step of the Commit Handler commits the plan. The epic branch holds only lande
 
 #### Base branch
 
-The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 5 and fails with kind `base_missing` when the remote has no such branch. A group's branch starts from the tip of its epic's branch. When the epic branch is missing at run start, the Runtime Manager creates it from the fetched tip of the base branch on the remote ([7.5](#75-behaviour)), so every group starts with the base and all landed work.
+The base branch is the value of `commit.base_branch`; when it is empty, it is the remote's default branch at its fetched tip. `Publish` runs a fetch of that branch before step 5 and fails with kind `base_missing` when the remote has no such branch. A group's worktree starts at the tip of its epic's branch. When the epic branch is missing at run start, the Runtime Manager creates it from the fetched tip of the base branch on the remote ([7.5](#75-behaviour)), so every group starts with the base and all landed work.
 
 #### Quarantine
 
 A group whose risk level is `high` or `critical` is never landed on the epic branch. The Task Manager calls `Quarantine` instead of `Publish`, and the run moves on.
 
-1. `Quarantine` checks the approval and the lease as `Publish` does (steps 1 to 3), and commits the approved tree on the group branch, which was cut from the epic branch, so the branch holds only this group's change.
-2. It pushes the group branch once to its own name.
-3. `Forge.OpenPR` opens a draft pull request from the group branch into the epic branch, with a title ([TODO: the quarantine pull request's title ([G-313](#g-313))]), the label `commit.pr_label` and `RenderBody` as its body. Because it is a draft and the push rule gives CI one push per pull request, a repository whose workflow skips drafts starts no CI. [TODO: the draft-skip line a repository's workflow needs is an edit to the target repository, not Komodo's ([G-306](#g-306))]
-4. The group is Done with outcome `quarantined`, and the Cleanup Handler runs. Groups that depend on it are deferred: they are not blocked and not failed, and the run finishes every other group.
-5. The epic's pull request body lists each quarantined pull request and each deferred group.
-6. When a person merges the quarantine into the epic branch, the next `komodo run` finds it with `Forge.Merged`, fetches the epic branch and starts the deferred groups from the new tip.
+1. `Quarantine` checks the approval and the lease as `Publish` does (steps 1 to 3). [TODO: how the quarantine route works when a group has no branch of its own: where the approved work is committed, what is pushed, and what the draft pull request is made from ([G-330](#g-330))]
+2. `Forge.OpenPR` opens a draft pull request into the epic branch, with a title ([TODO: the quarantine pull request's title ([G-313](#g-313))]), the label `commit.pr_label` and `RenderBody` as its body. Because it is a draft and the push rule gives CI one push per pull request, a repository whose workflow skips drafts starts no CI. [TODO: the draft-skip line a repository's workflow needs is an edit to the target repository, not Komodo's ([G-306](#g-306))]
+3. The group is Done with outcome `quarantined`, and the Cleanup Handler runs. Groups that depend on it are deferred: they are not blocked and not failed, and the run finishes every other group.
+4. The plan's pull request body lists each quarantined pull request and each deferred group.
+5. When a person merges the quarantine into the epic branch, the next `komodo run` finds it with `Forge.Merged`, fetches the epic branch and starts the deferred groups from the new tip.
 
 ```go
 // QuarantineResult is what a finished Quarantine returns.
 type QuarantineResult struct {
-	Branch string `json:"branch"`  // the group branch that was pushed
+	Branch string `json:"branch"`  // the quarantine branch that was pushed
 	PRURL  string `json:"pr_url"`  // the draft pull request into the epic branch
 	PRNew  bool   `json:"pr_new"`  // true when this call opened it
 }
 
-// Quarantine commits the approved tree on the group branch, pushes it once and opens a draft pull request into the epic branch.
+// Quarantine pushes the approved work once and opens a draft pull request into the epic branch.
 func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult, error)
 ```
 
@@ -13755,12 +13754,12 @@ func (h *Handler) Quarantine(ctx context.Context, a Approval) (QuarantineResult,
 
 | Case | Branch pushed | Pull request | Opened |
 |---|---|---|---|
-| Epic | `komodo/<epic>`, once | Ready, into the base branch; lists every quarantine; a person merges | After the epic's last landing |
-| Quarantine | The group branch, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
+| Epic | `komodo/<epic>`, once | Ready, into the base branch; the plan summary, all changes and the changelog reference; lists every quarantine; a person merges | After the epic's last landing |
+| Quarantine | The quarantine branch, once | Draft, into the epic branch; holds only that group; a person merges | When the group is approved |
 
 #### Push budget
 
-A push is what wakes CI; a local commit costs nothing. So each group lands as one squashed commit, locally, and Komodo pushes once per pull request: the epic branch after its last landing, and each quarantine branch once. CI runs once per pull request instead of once per group. The task commits of the group branch (`Save`) stay local and are squashed away by the landing.
+A push is what wakes CI; a local commit costs nothing. So each group lands as one squashed commit, locally, and Komodo pushes once per pull request: the epic branch after its last landing, and each quarantine branch once. CI runs once per pull request instead of once per group. The task commits in the group's worktree (`Save`) stay local and are squashed away by the landing.
 
 ### 15.6 State
 
@@ -13768,11 +13767,11 @@ The Commit Handler keeps no state on disk. The group's stage lives in the State 
 
 | Item | State | Moves on | True after the move |
 |---|---|---|---|
-| Group branch | Saved | `Save` | Each finished task is a commit on the branch; nothing is pushed |
-| Group branch | Approved | `Commit` | The approved content is a commit on the branch |
+| Group worktree | Saved | `Save` | Each finished task is a commit in the worktree; nothing is pushed |
+| Group worktree | Approved | `Commit` | The approved content is a commit in the worktree |
 | Epic branch | Landed | `Squash` | The local epic tip holds the group as one commit; nothing is pushed |
 | Epic branch | Pushed | `Push` after the last landing | The remote holds the epic tip |
-| Quarantine branch | Pushed | `Quarantine` | The remote holds the group branch and a draft pull request names it |
+| Quarantine branch | Pushed | `Quarantine` | The remote holds the quarantine branch and a draft pull request names it |
 | Epic branch | Paused | A failed recheck | Only the group that paused it may land |
 | Pull request | Open | `OpenPR` | A ready pull request names the epic branch |
 | Pull request | Current | `UpdatePR` | The body matches the latest facts |
@@ -13831,7 +13830,7 @@ A repeat of `Publish` finds each state already true and moves on, which is why a
 | Crash after the landing, before the recheck | `Landed` lists the group on repeat | The squash is skipped; the recheck runs | Landed |
 | Epic push fails for good | `PushEpic` fails 3 tries, 30 s then 60 s apart | The Runtime Manager publishes `stalled` with reason `unpushed`; landed work stays in the local epic branch | The run ends with the epic unpushed |
 | Crash after the last push, before the pull request | The remote holds the tip on repeat | Push skipped; `FindPR`, then `OpenPR` | Pull request open |
-| Crash after a quarantine push, before the draft pull request | The remote holds the group branch on repeat | Push skipped; `FindPR`, then `OpenPR` as a draft | Quarantined |
+| Crash after a quarantine push, before the draft pull request | The remote holds the quarantine branch on repeat | Push skipped; `FindPR`, then `OpenPR` as a draft | Quarantined |
 | Crash after the pull request, before cleanup | `FindPR` finds it on repeat | `UpdatePR`, then `Cleaner.Complete` | Cleanup runs |
 
 The retry schedule and the block reasons belong to the Runtime Manager ([chapter 7](#7-runtime-manager)); the numbers above are the schedule it applies to a retryable `PublishError`.
@@ -13852,7 +13851,7 @@ No key selects where groups land: every group lands on its epic's branch.
 
 Component tests use a local bare repository as the remote and a mock `gh` that returns documented output.
 
-- `Save` after a finished task commits the worktree on the group branch, pushes nothing and leaves the remote unchanged.
+- `Save` after a finished task commits the group's worktree, pushes nothing and leaves the remote unchanged.
 - A second `Save` with an unchanged worktree commits nothing and returns `Saved` false.
 - `Save` with a stale fence returns `ErrLeaseLost` and commits nothing.
 - An approval whose verdicts name different trees writes nothing.
@@ -13863,12 +13862,12 @@ Component tests use a local bare repository as the remote and a mock `gh` that r
 - A push to a remote that holds extra commits returns `ErrPushRejected` and leaves the remote unchanged.
 - A stale fence read just before the push refuses the push.
 - Two groups of one epic landing at once merge one after the other, in the order they arrived.
-- A seeded conflict returns `ErrConflict` on the group branch and leaves the epic branch unchanged.
+- A seeded conflict returns `ErrConflict` in the group's worktree and leaves the epic branch unchanged.
 - A failing recheck pauses the epic, reports `epic.paused`, holds a second group's landing, and a passing recheck from the paused group clears the pause.
 - After an engine restart, the first landing on an epic runs the recheck before the merge.
 - The first group of 2 opens no pull request and pushes nothing; the second pushes the epic branch once and opens exactly one pull request, from `komodo/<epic>` into the base branch.
 - Each landed group is one single-parent commit on the epic branch, and `Landed` reads its label and section back.
-- A `critical` group opens a draft pull request from its own branch into the epic branch after one push, lands nothing on the epic branch, and its dependents are deferred, not blocked.
+- A `critical` group opens a draft pull request into the epic branch after one push, lands nothing on the epic branch, and its dependents are deferred, not blocked.
 - After the quarantine is merged, `Forge.Merged` is true and the next run starts the deferred groups from the new epic tip.
 - Over a run of 3 landed groups and 1 quarantine, the remote receives 2 pushes.
 - The epic's pull request is titled `<epic label>: <N> task groups`.
@@ -13887,7 +13886,8 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-307](#g-307) | How the epic branch reaches the remote when a quarantine needs it | 15.5 |
 | [G-308](#g-308) | The epic pull request while groups are quarantined or deferred | 15.5 |
 | [G-313](#g-313) | The title of a quarantine pull request | 15.5 |
-| [G-323](#g-323) | Whether and how a lasting record of task groups is kept | 15.1 |
+| [G-323](#g-323) | How the changelog is anchored | 15.1, 15.3 |
+| [G-330](#g-330) | How the quarantine route works when a group has no branch | 15.5 |
 
 ## 16. Cleanup Handler
 
@@ -13920,11 +13920,11 @@ What the Cleanup Handler guarantees:
 - It never removes a group's state record or events: history stays for `replay` and for reading what happened.
 
 What lies beside it:
-- The Cleanup Handler removes the group's branch, worktree and Docker container itself. The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
+- The Cleanup Handler removes the group's worktree and Docker container itself. The Lease Manager keeps the lease registry and performs no git write; the Runtime Manager calls its `Release` when the group closes ([chapter 9](#9-lease-manager)).
 - The Task Manager owns the sandbox and the group's closing; the Cleanup Handler calls only its `CloseTaskGroup()`, and the Task Manager destroys the sandbox inside it.
-- `komodo clean` removes everything that belongs to no open run, and any caller may run it, including the orchestrator. The worktrees, local group branches and containers go through `Sweep` and obey the guarantees above; the caches, event logs and metrics records belong to the Cache Manager, the Event Bus and the Metrics Service, which the Runtime Manager asks ([7.5](#75-behaviour)).
+- `komodo clean` removes everything that belongs to no open run, and any caller may run it, including the orchestrator. The worktrees and containers go through `Sweep` and obey the guarantees above; the caches, event logs and metrics records belong to the Cache Manager, the Event Bus and the Metrics Service, which the Runtime Manager asks ([7.5](#75-behaviour)).
 - `komodo abandon (id)` drops a group for good through `Discard`.
-- Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), so each group's local branch is redundant once its landing is on the remote; 16.5 lists the branches that go. A squashed group branch is deleted when the epic branch has a commit whose changes are identical by content to the group's whole change; otherwise it is kept until the epic merges.
+- Every group lands on its epic's branch ([chapter 15](#15-commit-handler)), and a group has no branch, so cleanup removes only the group's worktree and container; 16.5 lists the branches that go.
 
 ### 16.2 Package Layout
 
@@ -13958,7 +13958,6 @@ type Published struct {
 	Run      string         `json:"run"`
 	Group    string         `json:"group"`
 	Epic     string         `json:"epic"`     // the epic the group landed on, such as plan-7f3a9c
-	Branch   string         `json:"branch"`   // group branch that was landed
 	Tip      string         `json:"tip"`      // commit id the remote must hold
 	Remote   string         `json:"remote"`   // remote that received the push
 	Contains string         `json:"contains"` // remote reference whose history must hold Tip
@@ -13987,7 +13986,6 @@ type PublishedEpic struct {
   "run": "0198f3a2-6c1e-7b44-9d0a-3f5e1c2b7a10",
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "epic": "plan-7f3a9c",
-  "branch": "<group branch>",
   "tip": "9f2c1ab04e6d7c33b1a8e5d0f4c7a92e1b6d3f80",
   "remote": "origin",
   "contains": "origin/komodo/plan-7f3a9c",
@@ -14040,8 +14038,7 @@ Every group-named path is `<root>/<group>`. A group id that is not one plain pat
   "group": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22",
   "removed": [
     { "kind": "container", "name": "0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
-    { "kind": "worktree", "name": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" },
-    { "kind": "branch", "name": "<group branch>", "reason": "" }
+    { "kind": "worktree", "name": "/Users/dev/.komodo/wt/shop/0198f3a2-7d20-7c10-8a31-5b0e9d4c6f22", "reason": "" }
   ],
   "kept": []
 }
@@ -14121,11 +14118,6 @@ type Git interface {
 	RemoveWorktree(ctx context.Context, clone, path string) error
 	// DeleteBranch deletes a local branch only when it still points at expectTip and that commit is in the history of containedIn.
 	DeleteBranch(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DeleteLanded deletes a local branch only when it still points at expectTip and containedIn holds it by ancestry
-	// or has a commit whose change is identical to the branch's whole change.
-	DeleteLanded(ctx context.Context, clone, branch, expectTip, containedIn string) error
-	// DiscardBranch deletes a local branch that still points at expectTip, whether or not the remote holds that commit; only Discard calls it.
-	DiscardBranch(ctx context.Context, clone, branch, expectTip string) error
 	// DiscardWorktree removes a worktree and its files even when they hold work the tip lacks; only Discard calls it.
 	DiscardWorktree(ctx context.Context, clone, path string) error
 	// BranchTip returns the commit a local branch points at; the bool is false when the branch does not exist.
@@ -14175,7 +14167,7 @@ type Errors interface {
 }
 ```
 
-An error from `RemoveWorktree`, `DeleteBranch`, `DiscardBranch` or `DiscardWorktree` that carries a `Refused() bool` method answering true is a refusal on purpose: it is listed under `kept` and not sent to the Error Handler.
+An error from `RemoveWorktree`, `DeleteBranch` or `DiscardWorktree` that carries a `Refused() bool` method answering true is a refusal on purpose: it is listed under `kept` and not sent to the Error Handler.
 
 | Caller | Call | When |
 |---|---|---|
@@ -14213,19 +14205,14 @@ flowchart TB
 2. It removes the group's Docker container through `Containers.Remove` first, because the container mounts the worktree. With no Docker, or no container, the step succeeds with nothing removed.
 3. It removes Quality Assurance's throwaway checkout `<Roots.QA>/<group>` and the group's session temporary folder `<Roots.Temp>/<group>`.
 4. It removes the worktree with `Git.RemoveWorktree`. If the worktree holds files the tip lacks, it keeps the worktree and lists it under `kept`. A link in place of the worktree is unlinked and never passed to git.
-5. It deletes the group's local branch. For a group landed locally (`landed` set) it calls `DeleteLanded(ctx, clone, branch, expectTip, containedIn)` with `containedIn` the local epic branch (`into`); otherwise `DeleteBranch` with the remote reference. `DeleteLanded` deletes only if the branch tip equals `expectTip` (else `ErrTipMoved`), and then only if one of these holds:
-   - `containedIn` holds the tip by ancestry;
-   - `containedIn` holds a commit with the identical change, compared by `git patch-id --stable` between the group's whole change since the merge base and each non-merge commit since that merge base;
-   - the group's change since the merge base is empty.
-
-   Otherwise it returns `ErrNotContained`. A refusal is listed under `kept`. When the worktree was kept, the branch is kept with it.
+5. It deletes no branch: a group has none, and its work is on the epic branch.
 6. It calls `CloseTaskGroup()` on the group's Task Manager, which destroys the sandbox, then reports `cleanup.done` with the `Report`. The Runtime Manager calls the Lease Manager's `Release` when the group closes ([chapter 9](#9-lease-manager)).
 
 The Runtime Manager publishes `run-complete` only after every group of the run has been closed this way and the epic's pull request was announced ([chapter 15](#15-commit-handler)).
 
 #### Branches under epic landing
 
-1. The redundant branch is the group's local branch, which was never pushed; for a locally landed group `into` is the local epic branch, and otherwise `contains` is the epic's remote branch.
+1. A group has no branch, so `Complete` deletes none; `into` names the local epic branch that holds the landing.
 2. `CompleteEpic` fetches the remote and runs the epic cleanup of this step with the `PublishedEpic` the Commit Handler sends after the push and pull request. When `epic_done` is true, the epic's pull request is open, so the landing worktree (`landing`) and the local epic branch also go, with `contains` set to the epic's remote branch. The local epic branch is `contains` without its `remote/` prefix, and it goes only if it is in the history of `contains` and the landing worktree is gone. A `contains` outside `komodo/`, such as `origin/main`, deletes no local branch.
 3. The remote epic branch stays: the open pull request needs it.
 
@@ -14237,10 +14224,10 @@ A sweep runs once each time the engine starts, after the recovery pass has marke
 
 1. `Sweep` asks `Groups.Unfinished` and fetches the remote once, without pruning. It collects group ids from the folders in `Roots.Worktrees`, `Roots.QA` and `Roots.Temp` and from `Containers.List`. A group that is unfinished (stopped, blocked, paused or crashed, so `komodo run (id)` can continue it) is kept whole and listed under `kept`.
 2. For each remaining group it takes the Lease Manager's group lock when `Leases` offers one, then reads the lease through `Leases.Holder` and skips a group a live run holds (live when `Handler.Live` says so). Before every removal it reads the lease again and stops that group if a live run has taken it. It removes the group's Docker container, Quality Assurance checkout and session temporary folder.
-3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed. It then deletes the group's local branch, named by the group's lease record, with the remote-based `redundantBranch`, which deletes it when the remote holds its tip in any branch; `Sweep` does not call `DeleteLanded`. [TODO: whether `Sweep` also deletes a squashed group branch by the content-identical check ([G-309](#g-309))] A group with no lease record to name its branch, and the branch of a worktree that was kept are kept and listed.
+3. It removes a worktree with no live lease that holds no files the tip lacks; a worktree that does is kept and listed..
 4. It returns a `Report` and reports `cleanup.swept`.
 
-Last, `Sweep` removes the landing worktree `<Roots.Landings>/<epic>` and the local branch `komodo/<epic>` of every epic that no unfinished group lands on, judged by the unfinished groups' lease branches `komodo/<epic>-<group>`; when any unfinished group has no lease branch to read, every landing is kept.
+Last, `Sweep` removes the landing worktree `<Roots.Landings>/<epic>` and the local branch `komodo/<epic>` of every epic that no unfinished group lands on, [TODO: how `Sweep` tells which epic an unfinished group lands on now that a lease records no branch ([G-332](#g-332))]
 
 `Preview` fetches once without pruning and walks the same groups and lists each container, checkout, worktree and branch that `Sweep` would try to remove, under `removed`; it calls no removal and reports no fact. A worktree that holds files the tip lacks shows as removable in a preview and is kept when `Sweep` runs.
 
@@ -14251,7 +14238,7 @@ A crash or `stop` leaves the group's worktree, branch and container in place. `k
 `komodo abandon (id)` reaches `Discard` through the Runtime Manager, which stops the group first.
 
 1. `Discard` takes the Lease Manager's group lock when `Leases` offers one and refuses with `ErrLeaseHeld` when a live run still holds the group; stopping the group revokes its lease first. It reads the lease again before every removal, and a live holder stops it with `ErrLeaseHeld`.
-2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too; a link in its place is unlinked, not followed. With `KeepWorktree` the branch stays with the worktree. Otherwise it deletes the local branch, named by the group's lease record, with `DiscardBranch`, which drops unpublished work, and calls `CloseTaskGroup()`, which destroys the sandbox.
+2. It removes the group's Docker container, the checkouts and, unless `KeepWorktree` is set, the worktree with `DiscardWorktree`, which deletes its files too and drops unpublished work; a link in its place is unlinked, not followed. It then calls `CloseTaskGroup()`, which destroys the sandbox.
 3. It keeps the group's state record and events, and reports `group.discarded` with the reason. The Runtime Manager calls the Lease Manager's `Release` when the group closes.
 4. Dependent groups are then marked `waiting on discarded group` by the Runtime Manager in status, not in their own records, until `run` is given a plan that clears the wait.
 
@@ -14328,18 +14315,17 @@ Component tests use a temporary git repository, a local bare repository as the r
 - No call deletes a remote branch or closes a pull request.
 - `Sweep` skips a group whose lease a live run holds.
 - `Preview` lists what `Sweep` would remove and removes nothing, and prunes no reference.
-- `Sweep` keeps an unfinished group's container, checkouts, worktree and branch, and fetches the remote once however many groups it visits.
+- `Sweep` keeps an unfinished group's container, checkouts and worktree, and fetches the remote once however many groups it visits.
 - `Sweep` clears the container and checkouts of a group whose worktree is gone, and the landing worktree of an epic no unfinished group lands on.
 - A link in place of a worktree is unlinked, and the worktree it points at survives.
 - A group another run takes after the lease was read is not touched by `Sweep` or `Discard`.
-- `Complete` refuses a worktree path that is not its own group's, and deletes no branch outside `komodo/`.
-- A kept worktree keeps its branch, in `Complete`, `Sweep` and `Discard` with `KeepWorktree`.
+- `Complete` refuses a worktree path that is not its own group's, and deletes no branch for a group.
 - `UnusedVersions` returns nothing for a group with no version, and never returns the running binary's version.
 - A path or group id outside `Roots`, including one reached through a link, is refused with `ErrOutsideRoots` and nothing there is deleted.
 - `UnusedVersions` excludes the version named by a blocked group.
 - `run-complete` is not published while any group of the run is unclosed.
 - When the last group of a plan closes, `Complete` deletes the plan folder; the folder of a plan with an open group is kept.
-- `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, deletes a branch holding unpublished commits, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
+- `Discard`, reached by `abandon (id)`, refuses a group a live run holds, removes the container, drops unpublished work, keeps the state record, and with `KeepWorktree` leaves the checkout on disk.
 
 ### 16.10 Open Gaps
 
@@ -14347,7 +14333,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 
 | Gap | Question | Used in |
 |---|---|---|
-| [G-309](#g-309) | Whether `Sweep` uses the content-identical branch check | 16.5 |
+| [G-332](#g-332) | How `Sweep` tells which epic an unfinished group lands on | 16.5 |
 
 ## 17. Error Handler
 
@@ -14719,7 +14705,7 @@ Each error value is declared in the package of its owner and returned to its cal
 | `ErrSkillUnknown`, `ErrSkillNotAllowed`, `ErrSectionUnknown`, `ErrSkillHash` | A skill name, allowlist, heading or fingerprint failed | [6. Context Manager](#6-context-manager) |
 | `ErrContext` (brief builder) | The brief exceeds half the context of every link | [6. Context Manager](#6-context-manager) |
 | `ErrShapeUnknown`, `ErrFactsInvalid`, `ErrCodeUnknown` | A shape, fact set or code is not in its list | [2. Output Formatter](#2-output-formatter) |
-| `ErrLeased`, `ErrLeaseLost`, `ErrBranchTaken` | A lease is held by another run, lost, or names a taken branch | [9. Lease Manager](#9-lease-manager) |
+| `ErrLeased`, `ErrLeaseLost`, `ErrWorktreeTaken` | A lease is held by another run, lost, or names a taken worktree | [9. Lease Manager](#9-lease-manager) |
 | `ErrStaleRev`, `ErrClaimed`, `ErrNotWriter`, `ErrNotFound`, `ErrNewerVersion` | A record is stale, taken, forbidden, absent or too new | [10. State Manager](#10-state-manager) |
 | `ErrUnavailable`, `ErrUnauthorized`, `ErrModelGone`, `ErrBilling`, `ErrNotYet`, `ErrStreamClosed`, `LimitError` (provider) | A model link failed or hit a cap | [11. Task Manager](#11-task-manager) |
 | `ErrNoProvider`, `ErrPaidRefused`, `ErrContext` (router), `ErrPaused` | No allowed link has room | [11. Task Manager](#11-task-manager) |
@@ -15828,13 +15814,13 @@ flowchart LR
 ```
 
 1. `komodo plan` reaches the Intake Handler as a `plan` event. The CLI sends the event to the engine over `engine.sock`, and the engine's bus delivers it. The Intake Handler reads the person's documents and writes the plan.
-2. After planning, the Intake Handler publishes `plan` / `written` to the CLI. It starts no run; `komodo run` does that. [TODO: whether an auto-approved plan starts a run itself ([G-322](#g-322))]
+2. After planning, the Intake Handler publishes `plan` / `written` to the CLI. It starts no run; `komodo run` does that.
 3. `komodo run (id)`, `stop`, `status`, `ui`, `abandon` and `replay` reach the Runtime Manager as requests on `engine.sock`. `run (plan id)` publishes `run-start` with the plan id in `data.target` and an empty `data.groups`, so every group of the plan that is not done runs. `run (id) --schedule <time>` is a request that publishes no event: the engine mints the run id, writes an entry with it to `schedule.json`, and publishes the one `run-start` at that time.
 4. The Runtime Manager makes sure the epic branch exists ([7.5](#75-behaviour)), then starts one Task Manager goroutine per group whose dependencies are met, and passes it the cache handle the Runtime Manager opened. Commands go down each group's command channel, and replies come back on its reply channel.
 5. The Runtime Manager saves each group's state through the State Manager before it acts on a change, and reads and writes the lease and the schedule queue through their managers. Recovery reads only that saved state.
-6. The Task Manager creates the group's branch and worktree, runs build, then test and review, and asks the Commit Handler for a local commit after each finished task. It hands approved work to the Commit Handler.
+6. The Task Manager creates the group's detached worktree, runs build, then test and review, and asks the Commit Handler for a local commit after each finished task. It hands approved work to the Commit Handler.
 7. The Commit Handler lands each approved group on its epic's local branch as one squashed commit, one group at a time per epic, and rechecks that branch. It pushes the epic branch once, after the last landing, opens one pull request for the epic, and a person merges it. Then it hands over to the Cleanup Handler.
-8. The Cleanup Handler removes the group's branch and worktree and calls `CloseTaskGroup()`, and the Runtime Manager releases the lease through the Lease Manager.
+8. The Cleanup Handler removes the group's worktree and calls `CloseTaskGroup()`, and the Runtime Manager releases the lease through the Lease Manager.
 9. The Event Bus appends every event to `events/<run-id>.jsonl` before it broadcasts it, and the Metrics Service updates its figures from the live events. A crash can drop the lines not yet handed to the operating system, never anything from the saved state.
 ## 21. Verification, Operations and Cutover
 
@@ -15846,7 +15832,7 @@ Every subsystem can pass its own proof cases while the whole still fails on a re
 
 All the owner decisions on review severity, judge confidence, build and lint, risk levels, quarantine, Quality Assurance gate, pull request shapes and the push budget are built before the trial runs, so the runs test the whole review line.
 
-Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree, group branch or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
+Three of these checks already run in `internal/integration`, without the build tag, against the built binary, a temporary Komodo home, a local bare remote, a fake `gh` and a fake Messages server that picks its reply by agent role: `TestPhase5OneGroupPassesBuildTestAndReview` (one group passes build, test and review and ends done), `TestPhase6PlannedGroupIsPublishedAndCleanedUp` (`komodo plan`, then the run, a `publish.done` fact, the epic branch on the remote, and no worktree or lease left) and `TestOneEngineRunsGroupsFromTwoRepositories` (one engine, two repositories). `TestBinaryEngineServesStatus` proves the hidden engine verb binds the socket.
 
 #### Fixtures
 
@@ -15865,7 +15851,7 @@ Three of these checks already run in `internal/integration`, without the build t
 | Rework | Fixture B | Quality Assurance or Reviewer returns the group to the Builder; after 3 tries in all, any mix of causes, the group is held for the 60-minute final-try window and then fails; a builder session timeout counts as a failed try and a failing check never ends a builder session |
 | Old failure | Fixture A | The group passes with a warning naming the test that already failed at the base |
 | Race | Two `komodo run plan-7f3a9c` commands target the same group | The Lease Manager grants 1 lease; the other command is refused, and only 1 push reaches the remote |
-| Stop | `komodo stop plan-7f3a9c tg-1` during Build, after the first task is finished | The finished task is a local commit on the group branch, nothing is pushed, the lease is revoked, and a later `komodo run plan-7f3a9c tg-1` continues the group |
+| Stop | `komodo stop plan-7f3a9c tg-1` during Build, after the first task is finished | The finished task is a local commit in the group's worktree, nothing is pushed, the lease is revoked, and a later `komodo run plan-7f3a9c tg-1` continues the group |
 | Crash | `kill -9` the engine during Build, then `komodo run plan-7f3a9c` | The group continues from its saved state; the event log holds every line handed to the operating system before the kill, and recovery does not read it |
 | Fresh machine | On a clean macOS machine, follow only `README.md` | The fixture group is published |
 
@@ -15902,7 +15888,7 @@ Each row proves one fact of the design that the full run does not reach. They us
 | A crash spends a try | Go tests `TestACrashSpendsOneTry` and `TestCrashSessionEndChargesOneRetryAndOrdersTheStageAgain` | A builder crash spends 1 try and orders the stage again |
 | Public interface | Go tests `TestPublicAPIChanged` and `TestClassifyPublicAPIFromDiff` | A diff that changes an exported Go declaration raises the group's risk to `med_high`; an unexported change does not |
 | State migration to version 5 | Go tests `TestMigrationMovesAQABlockToRetries` and `TestMigrationMovesAFlakyBlockToRetries` | A group saved blocked on `qa` or `flaky` loads blocked on `retries`, with its block count added to the `retries` count |
-| Abandon | `komodo abandon plan-7f3a9c tg-2` during Build | The branch, the worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
+| Abandon | `komodo abandon plan-7f3a9c tg-2` during Build | The worktree and the container are gone, the state record and events remain, and the lease is released when the group closes |
 | Limits | A fake provider reports a plan window at 80%, then 100%; a group reaches 90%, then 100% of its token cap | A warning at 80%; at 100% the affected groups pause after their current step, keep their leases and resume when the window resets; paid spending only warns without a ceiling; the capped group gets a nudge at 90% and pauses with cause `group_tokens` at 100%, and `--approve` continues it |
 | Storage | Kill the engine during a lease write, then leave a lock file behind | No half record is read, the stale lock expires after its timeout, and `go.mod` lists no modules |
 | Model links | Exhaust the Claude window with paid use off | The subscription link is tried first, the paid interface is refused, and the groups pause until the window resets |
@@ -16185,7 +16171,6 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-306"></a>G-306 | Quarantine | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: whether a quarantine draft pull request skips CI | Deferred, until the CICD runner image is set | [15](#15-commit-handler) |
 | <a id="g-307"></a>G-307 | Push budget | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: how the epic branch reaches the remote when a quarantine pull request needs it as its base | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
 | <a id="g-308"></a>G-308 | Epic pull request | Deferred until the CICD runner image is determined. Builds will not be started by GitHub Actions; the per-repository CICD Docker image embeds the commands that set up CodeDeploy; severe-ranked changes are pushed to a quarantine branch; the owner may need GitHub Actions that poll CodeDeploy results. Open: when the epic's last landing is reached while groups are quarantined or deferred, and whether a later run that lands deferred groups pushes again. Option A, a draft epic pull request at run end listing landed, quarantined and deferred groups and marked ready when all land, is close, pending CICD refinement | Deferred, until the CICD runner image is set | [15](#15-commit-handler), [7](#7-runtime-manager) |
-| <a id="g-309"></a>G-309 | Cleanup | The rule is decided: a squashed group branch is deleted when the epic branch has a commit whose changes are identical by content to the group's whole change, else kept until the epic merges. The interface is built (`DeleteLanded`, 16.4) and `Complete` uses it. Open: `Sweep` still deletes a branch by the remote-based `redundantBranch` and does not use `DeleteLanded` | Owner decision | [16](#16-cleanup-handler) |
 | <a id="g-310"></a>G-310 | Deep checks | Which Go mutation tool; a quick proof of concept picks it. Other languages come later | Quick proof of concept | [13](#13-quality-assurance) |
 | <a id="g-311"></a>G-311 | Surviving mutants | What a surviving mutant does now that Quality Assurance writes no tests; Go records it | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-312"></a>G-312 | Quality Assurance gate | Whether a sign-off voided by a changed test file spends a retry | Owner decision | [13](#13-quality-assurance) |
@@ -16193,10 +16178,10 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-314"></a>G-314 | Risk levels | Deferred until the CICD runner is refined. Whether `cicd.yaml` and compose files count as `critical`, and whether the path tables of 14.3 hold, including migration folders and the extra CI files `.circleci`, `Jenkinsfile`, `.gitlab-ci.yml` and `azure-pipelines.yml` | Deferred, until the CICD runner is refined | [14](#14-reviewer) |
 | <a id="g-318"></a>G-318 | Risk inputs with no detector | How Go detects a comment-only change (`Verified`); the risk rules name it, but no caller sets it. Public interface detection is built: a line scan of the diff for changes to exported Go declarations | After the trial runs | [14](#14-reviewer) |
 | <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
-| <a id="g-322"></a>G-322 | Plan auto-approval | Manual approval is the default: `komodo plan` writes the plan and stops. Auto-approval options sit on top of it, modelled on how Claude Code's plan mode offers approval choices. Owner: "A, but options for auto-approvals on top of manual. Consider this similar to how Claude Code does it." Open: the option names, what each does, and whether an auto-approved plan publishes `run-start` itself | Owner decision | [5](#5-intake-handler), [1](#1-cli) |
 | <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
-| <a id="g-329"></a>G-329 | Answering a plan | `komodo run` takes only a plan id and finishes the plan. Open: which blocked group `--approve` or `--deny` reaches when more than one group of the plan is blocked | Owner decision | [1](#1-cli), [7](#7-runtime-manager) |
-| <a id="g-330"></a>G-330 | Group branch name | The `komodo/<epic>-<group>` convention is dropped. Owner: "Lets drop that convention since we wont have preplanned tasks in the backlog anymore." Open: what a group's own branch is named | Owner decision | [9](#9-lease-manager), [11](#11-task-manager), [15](#15-commit-handler) |
+| <a id="g-330"></a>G-330 | Quarantine without a group branch | A group has no branch of its own: its worktree is detached and its work lands on the plan's feature branch. Owner: "The plan opens a feature branch for all task groups + tasks. Everything funnels into this feature branch." Open: how the quarantine route (a high or critical group's own draft pull request) works when a group has no branch: where the approved work is committed, what is pushed, and what the pull request is made from | Owner decision | [15](#15-commit-handler) |
+| <a id="g-331"></a>G-331 | Group rewrite | Owner: "what it would do is replan/rewrite the taskgroup depending. SO for example a prompt + 'komodo run <plan id> <TG id>' makes the changes." Decided: the planner rewrites that one group from the prompt, the lint checks run again on the plan, and the group runs. Open: how the prompt is passed on the command line, and what the rewrite does for a group that is running or done | Owner decision | [1](#1-cli), [5](#5-intake-handler) |
+| <a id="g-332"></a>G-332 | Landing sweep | A lease no longer records a branch, so the sweep cannot read an unfinished group's epic from it. Open: how `Sweep` tells which epic an unfinished group lands on, so it keeps that epic's landing worktree and branch | Owner decision | [16](#16-cleanup-handler) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 

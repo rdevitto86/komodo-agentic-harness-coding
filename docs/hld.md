@@ -19,7 +19,7 @@ flowchart LR
   T["Test<br><small>Quality Assurance in a sandbox</small>"]:::core
   R["Review<br><small>reviewer</small>"]:::core
   C["Commit<br><small>push branch, open pull request</small>"]
-  CL["Cleanup<br><small>free branch, worktree, resources</small>"]
+  CL["Cleanup<br><small>free worktree, resources</small>"]
   PR(["Pull request<br><small>a person merges</small>"]):::ok
   G -->|"1 plan"| I
   I -->|"2 run-start"| B
@@ -98,7 +98,7 @@ Each quality goal has a mechanism that code enforces. No model is trusted to beh
 |---|---|
 | Safety | The Task Manager checks every agent action against its permissions |
 | Simplicity | 19 subsystems with one job each, joined by one event bus instead of point-to-point messages |
-| Durability | Leases name exactly one owner per branch and worktree; each finished task is saved as a local commit before approval |
+| Durability | Leases name exactly one owner per worktree; each finished task is saved as a local commit before approval |
 | Cost control | The Resource Manager watches plan windows and spending, and the Cache Manager reuses context instead of re-sending it |
 | Observability | The bus stores every event before delivering it; the Metrics Service turns them into figures |
 
@@ -132,7 +132,7 @@ flowchart LR
 
 1. The CLI sends each command to the Runtime Manager, which broadcasts it as plan, run-start, run-stop or run-continue.
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
-3. The Intake Handler writes the plan and stops. Approving the plan with `komodo run` publishes run-start [TODO: auto-approval options ([G-322](lld.md#g-322))].
+3. The Intake Handler writes the plan and stops. `komodo run` approves and starts it.
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
 5. Each group's progress goes back onto the bus as run-status events.
 6. The watchers receive every event.
@@ -174,7 +174,7 @@ The Cache Manager keeps a local cache of things like frequent prompt responses, 
 
 #### 5.10 Lease Manager
 
-The Lease Manager manages the local lease registry, the single source of truth for which task group and agent owns which branch and worktree, the private checkout where a group works. It controls access to them and manages lease revocation and timeouts. The lease is released when its group closes. Detail: [chapter 9](lld.md#9-lease-manager).
+The Lease Manager manages the local lease registry, the single source of truth for which task group and agent owns which worktree, the private checkout where a group works. It controls access to them and manages lease revocation and timeouts. The lease is released when its group closes. Detail: [chapter 9](lld.md#9-lease-manager).
 
 #### 5.11 State Manager
 
@@ -198,11 +198,11 @@ The Reviewer is the final code check of the group's own changes, skipped at `low
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto its epic's branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per epic. A high or critical group gets its own quarantined draft pull request; groups that depend on it are deferred until it merges, and the run never waits for them [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and the changelog reference. A high or critical group gets its own quarantined draft pull request [TODO: how quarantine works without a group branch ([G-330](lld.md#g-330))]; groups that depend on it are deferred until it merges, and the run never waits for them [TODO: quarantine and epic pull request details ([G-306](lld.md#g-306), [G-307](lld.md#g-307), [G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
-The Cleanup Handler runs after work is pushed. It removes the group's redundant branches, even an unchanged one, and worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. When every group of a plan is closed, it deletes the plan's folder. Detail: [chapter 16](lld.md#16-cleanup-handler).
+The Cleanup Handler runs after work is pushed. It removes the group's worktree, frees the group's internal resources, and tells the Task Manager to close the group, which ends it inside the Runtime Manager. When every group of a plan is closed, it deletes the plan's folder. Detail: [chapter 16](lld.md#16-cleanup-handler).
 
 #### 5.18 Error Handler
 
@@ -269,7 +269,7 @@ sequenceDiagram
 1. The Runtime Manager starts a Task Manager once the group's dependencies are met and its lease is granted.
 2. The Builder works through the tasks in the group's worktree.
 3. Quality Assurance and Reviewer judge the same work at the same time; a failure returns the group to the Builder within its 3 tries; Quality Assurance failing open does not.
-4. With the approvals its level requires, the Commit Handler lands the group on its epic's branch. The Cleanup Handler removes redundant branches and the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
+4. With the approvals its level requires, the Commit Handler lands the group on its epic's branch. The Cleanup Handler removes the worktree, frees resources and calls the Task Manager to close the group, which destroys the sandbox.
 
 #### 6.3 Planning
 
@@ -314,8 +314,8 @@ Each kind of data has one owner, and every other part asks that owner.
 | Harness settings and agent registry | Configuration Manager |
 | Skills, prompt templates, tool-server connections | Context Manager |
 | Runtime cache | Cache Manager |
-| Lease registry: who owns each branch and worktree | Lease Manager |
-| Removing redundant branches and worktrees | Cleanup Handler |
+| Lease registry: who owns each worktree | Lease Manager |
+| Removing worktrees | Cleanup Handler |
 | Task group runtime state | State Manager |
 | Events | Event Bus in flight; Metrics Service for the record |
 
@@ -325,7 +325,7 @@ Each agent role in the registry names its model and its chain of links, subscrip
 
 #### 8.3 Security
 
-Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default; a refused action records an error event. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own branch and worktree. Only the Commit Handler pushes, never to the main branch and never with force.
+Three fences hold every agent. The Task Manager checks every requested action against the agent's permissions and refuses by default; a refused action records an error event. Commands run in a sandbox with no network except what the task needs. The lease keeps each group inside its own worktree. Only the Commit Handler pushes, never to the main branch and never with force.
 
 #### 8.4 Quality Gates
 
@@ -344,7 +344,7 @@ Each row names a decision, the alternative rejected and the reason.
 | A separate Commit Handler and Cleanup Handler | Ship doing landing and cleanup together | Publishing and freeing resources fail and retry independently |
 | Error Handler, Metrics Service and Resource Manager as watchers | Error handling and metrics spread through every part | One place catches errors, one records, one watches limits |
 | Only the Configuration Manager touches settings | Each part reading settings files | Settings stay consistent and out of agent reach |
-| A lease registry as the single source of truth for branch and worktree ownership | Locks spread across files | One answer to "who owns this branch" |
+| A lease registry as the single source of truth for worktree ownership | Locks spread across files | One answer to "who owns this worktree" |
 | One runtime per machine, reached by a local socket | One per run, or none | Scheduled runs and every group share one owner |
 | Recovery reads saved state; the bus stores every event before delivering it | A log kept by the Metrics Service | Replay has no gaps, and each record has one owner |
 | Continue a group with `run` | Separate build, test and review commands | No stage runs out of order |
@@ -400,7 +400,7 @@ Open decisions are the TODOs above, each linked to its row; the rest are build-t
 | Run | One execution of a plan's task groups, started by `komodo run` |
 | Event | A fact with a type and a subtype, published on the Event Bus |
 | Subscriber | A part that listens for one or more event types |
-| Lease | The registry entry that names the one group owning a branch and worktree |
+| Lease | The registry entry that names the one group owning a worktree |
 | Worktree | A private git checkout where one group works |
 | Sandbox | A sealed environment where agent commands run |
 | Skill | A document of standards placed in an agent's context |
