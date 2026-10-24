@@ -651,7 +651,7 @@ func (m *Manager) newInstance(ctx context.Context, role, slot string) (sandbox.I
 
 	setup := m.c.Commands["setup"]
 	spec := sandbox.Spec{
-		Group:      m.spec.Group,
+		Group:      m.spec.ID,
 		Worktree:   m.spec.Lease.Worktree,
 		GitDir:     m.spec.Lease.GitDir,
 		Writable:   []string{tmp, build},

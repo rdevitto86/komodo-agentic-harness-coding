@@ -319,6 +319,7 @@ func (k *repoKit) taskSpec(spec engine.GroupSpec, g intake.Group, cmds map[strin
 	ts := task.GroupSpec{
 		Run:        spec.Run,
 		Group:      spec.Label,
+		ID:         spec.ID,
 		Tasks:      tasks,
 		Files:      slices.Clone(spec.Files),
 		OtherFiles: spec.OtherFiles,

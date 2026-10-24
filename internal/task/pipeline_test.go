@@ -60,6 +60,30 @@ func TestPipelineRunsOneGroupThroughBuildTestReviewAndCommit(t *testing.T) {
 	}
 }
 
+// Two plans each have a group labelled tg-1, so a sandbox is keyed by the group id and never by the label.
+func TestSandboxIsKeyedByGroupID(t *testing.T) {
+	const id = "0192e4c5-7a10-7d3e-9b2f-000000000401"
+
+	r := newPipeRig(t, rigOpts{mut: func(s *GroupSpec, _ *Collaborators) { s.ID = id }})
+	r.model.on("builder", building(r.wt, "a.go", "package a\n", builderDone))
+	r.model.on("qa", sayResult(qaPass))
+	r.model.on("reviewer", sayResult(reviewerMet))
+	r.reachCleanup()
+
+	r.be.mu.Lock()
+	defer r.be.mu.Unlock()
+
+	if len(r.be.prepared) == 0 {
+		t.Fatal("no sandbox was prepared")
+	}
+
+	for _, s := range r.be.prepared {
+		if s.Group != id {
+			t.Fatalf("sandbox keyed by %q, want the group id %q", s.Group, id)
+		}
+	}
+}
+
 func TestApprovedGroupIsReportedBeforePublish(t *testing.T) {
 	r := newPipeRig(t, rigOpts{})
 	var atPublish int

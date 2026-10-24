@@ -15,6 +15,7 @@ import (
 type GroupSpec struct {
 	Run        string                 // run identifier, a version 7 UUID
 	Group      string                 // task group label, such as tg-1.2
+	ID         string                 // the group's unique id; names the group's sandbox containers
 	Tasks      []TaskSpec             // tasks in order
 	Files      []string               // the group's file globs; the builder writes only here
 	Lease      LeaseRef               // worktree and git folder the lease records

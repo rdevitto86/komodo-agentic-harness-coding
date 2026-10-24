@@ -394,7 +394,7 @@ func newPipeRig(t *testing.T, o rigOpts) *pipeRig {
 		}
 	}
 	spec := GroupSpec{
-		Run: "run-1", Group: "tg-1", Files: []string{"src/**", "*.go"}, Saved: o.saved,
+		Run: "run-1", Group: "tg-1", ID: "gid-1", Files: []string{"src/**", "*.go"}, Saved: o.saved,
 		Tasks: []TaskSpec{{ID: "t1", Title: "add the file", DoneWhen: "build"}},
 		Lease: LeaseRef{Worktree: wt, GitDir: filepath.Join(wt, "gd"), Fence: 3},
 		Agents: map[string]Permissions{
