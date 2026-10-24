@@ -134,9 +134,6 @@ flowchart LR
 2. A plan command reaches the Intake Handler, which plans with context from the Context Manager.
 3. The Intake Handler writes the plan and stops. `komodo run` approves and starts it.
 4. The Runtime Manager starts one Task Manager per task group, with its lease, state and cache.
-5. Each group's progress goes back onto the bus as run-status events.
-6. The watchers receive every event.
-7. The Error Handler prints errors to the caller through the CLI.
 
 Besides these hand-offs, a subsystem calls another directly when it needs an answer, such as asking the Configuration Manager for a setting. Every subsystem also publishes events to the Event Bus and listens for the types it needs; [5.5](#55-event-bus) lists them.
 
@@ -154,7 +151,7 @@ The Configuration Manager guards the harness settings and the agent registry, th
 
 #### 5.5 Event Bus
 
-The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape: a type, a subtype, the run and group it belongs to, a time and a small body. The bus lives in memory inside the runtime and keeps the event store: it writes every event to the run's log before it delivers it, and replay reads that log. Detail: [chapter 4](lld.md#4-event-bus).
+The Event Bus is the spine: every subsystem publishes facts to it, and every subsystem subscribes to the types it needs, so parts never need to know who listens. Every event has the same shape, a type and a subtype with a small body. The bus lives in memory inside the runtime and keeps the event store: it writes every event to the run's log before it delivers it, and replay reads that log. Detail: [chapter 4](lld.md#4-event-bus).
 
 #### 5.6 Intake Handler
 
@@ -162,15 +159,15 @@ The Intake Handler is the Intake stage. It starts the planner agent, gives it co
 
 #### 5.7 Context Manager
 
-The Context Manager guards everything an agent may see beyond the code: skills (documents of standards), agent prompt templates, and connections to Model Context Protocol servers, the tool servers some agents may use. It switches each item on or off, decides which agents may use it, and assembles an agent's prompt from them. The Intake Handler and Runtime Manager ask it for context, and it reads its skill, template and connection files. Detail: [chapter 6](lld.md#6-context-manager).
+The Context Manager guards everything an agent may see beyond the code: skills (documents of standards), agent prompt templates, and connections to Model Context Protocol servers, the tool servers some agents may use. It switches each item on or off, decides which agents may use it, and assembles an agent's prompt from them. Detail: [chapter 6](lld.md#6-context-manager).
 
 #### 5.8 Runtime Manager
 
-The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, escalations, timer extensions, timeouts and blocks, and each group's retry budget. Task Managers bring every need to it, and it produces most of the events on the bus. It runs as one background process per machine, started on demand ([7.1](#71-processes)). Before any group starts it creates the epic's branch. Detail: [chapter 7](lld.md#7-runtime-manager).
+The Runtime Manager is the backbone. It runs every task group of a run in parallel or in order, as their dependencies allow, and starts one Task Manager per group. It owns the run as a whole: each group's state, lease and cache through their managers, and its retries and blocks. Task Managers bring every need to it, and it produces most of the events on the bus. Before any group starts it creates the epic's branch. Detail: [chapter 7](lld.md#7-runtime-manager).
 
 #### 5.9 Cache Manager
 
-The Cache Manager keeps a local cache of things like frequent prompt responses, context and other information needed to improve performance and token efficiency. The Runtime Manager opens it and hands the Context Manager and each Task Manager a handle. It never returns a stored model answer in place of a new call. Detail: [chapter 8](lld.md#8-cache-manager).
+The Cache Manager keeps a local cache of things like frequent prompt responses, context and other information needed to improve performance and token efficiency. It never returns a stored model answer in place of a new call. Detail: [chapter 8](lld.md#8-cache-manager).
 
 #### 5.10 Lease Manager
 
@@ -178,27 +175,27 @@ The Lease Manager manages the local lease registry, the single source of truth f
 
 #### 5.11 State Manager
 
-The State Manager is the one place a task group's runtime state is read and written: its stage, counters, blocks and progress. Task Managers update it often through the Runtime Manager, and it checks every record against one schema before saving. It also keeps machine-wide records, such as the schedule queue, and is the only record crash recovery reads. Detail: [chapter 10](lld.md#10-state-manager).
+The State Manager is the one place a task group's runtime state is read and written: its stage, counters, blocks and progress. It checks every record against one schema before saving. It also keeps machine-wide records, such as the schedule queue, and is the only record crash recovery reads. Detail: [chapter 10](lld.md#10-state-manager).
 
 #### 5.12 Task Manager
 
-The Task Manager is the controller for one task group; the Runtime Manager starts one per group. It runs the pipeline from build to cleanup, talks to the Runtime Manager in both directions, and acts as the guard for its agents: every action an agent requests is checked against that agent's permissions before it runs. It owns the group's outbound model connections through the model client, which reaches subscription and paid links, and creates and destroys the group's test sandbox. It also creates the group's branch and worktree. Tests run in a Docker container per group; builder commands run in the operating-system sandbox. Detail: [chapter 11](lld.md#11-task-manager).
+The Task Manager is the controller for one task group; the Runtime Manager starts one per group. It runs the pipeline from build to cleanup, talks to the Runtime Manager in both directions, and acts as the guard for its agents: every action an agent requests is checked against that agent's permissions before it runs. It owns the group's outbound model connections through the model client, which reaches subscription and paid links, and creates and destroys the group's test sandbox. It also creates the group's branch and worktree. Detail: [chapter 11](lld.md#11-task-manager).
 
 #### 5.13 Builder
 
-The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. Its done result carries evidence: the commands it ran and their output. It hands finished work to Quality Assurance and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
+The Builder is the engineering agent that writes the code for one task group, task by task, inside the group's worktree. It works only through the actions its Task Manager allows; the Commit Handler saves each finished task as a local commit. It hands finished work to Quality Assurance and Reviewer together and fixes what they return. Detail: [chapter 12](lld.md#12-builder).
 
 #### 5.14 Quality Assurance
 
-Quality Assurance checks the builder's new and changed code: test accuracy, that every acceptance criterion is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance runs at every risk level and checks each item with its own run tool, scoring confidence from 0 to 100; Go never reruns it. A pass needs 80 or more, else the group returns to the Builder; a failed item blocks even without a command. A standing check enforces coverage: no change lowers whole-repository coverage below 90%, and each covers 90% of its added lines [TODO: how the planner brings a repository to 90% coverage ([G-321](lld.md#g-321))]. When the group is untestable, or it fails twice in a row, it fails open: the pull request carries a warning and no try is spent. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
+Quality Assurance checks the builder's new and changed code: test accuracy, that every acceptance criterion is met, and regressions. It validates inside the group's sandbox. Its turn starts with free checks in Go code, including build and lint; a failure returns to the Builder with no model call. Quality Assurance runs at every risk level and checks each item with its own run tool. A standing check enforces coverage: no change lowers whole-repository coverage below 90%, and each covers 90% of its added lines [TODO: how the planner brings a repository to 90% coverage ([G-321](lld.md#g-321))]. When the group is untestable, or it fails twice in a row, it fails open: the pull request carries a warning and no try is spent. The builder writes the tests; Go runs the deep checks. Detail: [chapter 13](lld.md#13-quality-assurance).
 
 #### 5.15 Reviewer
 
-The Reviewer is the final code check of the group's own changes, skipped at `low` and `med_low`. It reads them while Quality Assurance runs, and a group moves to publishing only when every judge that ran approves; otherwise the work returns to the Builder. Rules have six levels: `critical`, `high`, `med_high`, `medium`, `med_low` and `low`. Only the top three block, `medium` warns, and pre-existing issues never block; a block also needs the finding to carry the Reviewer's own proof (the command it ran and what it saw) with confidence 80 or more; Go never runs it. The Reviewer never fails open: its failure costs one try. Detail: [chapter 14](lld.md#14-reviewer).
+The Reviewer is the final code check of the group's own changes, skipped at `low` and `med_low`. It reads them while Quality Assurance runs, and a group moves to publishing only when every judge that ran approves; otherwise the work returns to the Builder. Only the top three of its six rule levels block, and only on a finding the Reviewer proved itself. The Reviewer never fails open: its failure costs one try. Detail: [chapter 14](lld.md#14-reviewer).
 
 #### 5.16 Commit Handler
 
-The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and a link to the plan's changelog fragment, a file it adds to the feature branch under the release the plan header names. A high or critical group blocks after it passes its checks with the question "land this risky change?": approving lands it on the feature branch and denying drops it as `abandon` does, groups that depend on it block with the reason `dependency` and other groups carry on. One `komodo run <plan id> --approve` answers every blocked group, including these. [TODO: epic pull request details while a risky group is blocked or dropped ([G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
+The Commit Handler publishes approved work: it squashes each approved group onto the plan's feature branch locally, one at a time with a recheck after each, then pushes once and opens one pull request per plan, holding a plan summary, all changes and a link to the plan's changelog fragment, a file it adds to the feature branch under the release the plan header names. A high or critical group blocks after it passes its checks with the question "land this risky change?": approving lands it on the feature branch and denying drops it as `abandon` does, groups that depend on it block with the reason `dependency` and other groups carry on. [TODO: epic pull request details while a risky group is blocked or dropped ([G-308](lld.md#g-308))]. Detail: [chapter 15](lld.md#15-commit-handler).
 
 #### 5.17 Cleanup Handler
 
@@ -284,7 +281,7 @@ sequenceDiagram
 
 1. Any part that fails publishes an error event; the Error Handler records it and prints it to the caller through the CLI.
 2. The Resource Manager raises a resource event before a plan window or spending limit is reached.
-3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has 3 tries in total, any mix of causes. A critical blocker (tooling failure, container crash, agent stalling mid-run) or a builder session timeout fails a try; a builder crash spends one unless a Komodo restart caused it. Failing checks never end a builder session; the builder works until it passes or its window ends. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try and enter its working time. Without that approval the group fails for good and is run again only from a fresh plan. Komodo's own faults spend no try. A breaker waits and then blocks after 4 blocker errors in a row from those faults or judge crashes, and the engine's own failure stops new sessions until a person runs `komodo run` from a terminal. Detail: [chapter 7](lld.md#7-runtime-manager).
+3. The Runtime Manager owns retries, timeouts and blocks for every group. A group that cannot continue without a person is blocked and announced with a run-status event; a person or the orchestrator continues it with `komodo run`. Each group has 3 tries in total, any mix of causes. The failure that spends the last try holds the group for a fixed 60-minute window, in which a person at a terminal may grant one final try and enter its working time; without that approval the group fails for good and is run again only from a fresh plan. Komodo's own faults spend no try. Detail: [chapter 7](lld.md#7-runtime-manager).
 4. After a crash, `komodo run` continues each group from its saved state.
 
 ## 7. Deployment
@@ -385,6 +382,12 @@ OpenAI's two links are built and tested against stand-ins; live calls wait for a
 
 Open decisions are the TODOs above, each linked to its row; the rest are build-time [gap register](lld.md#appendix-b-gap-register) rows.
 
+---
+
+*End of the read. The appendices below are lookup tables.*
+
+---
+
 ## 12. Glossary
 
 | Term | Meaning |
@@ -405,12 +408,6 @@ Open decisions are the TODOs above, each linked to its row; the rest are build-t
 | Sandbox | A sealed environment where agent commands run |
 | Skill | A document of standards placed in an agent's context |
 | Gap | A decision not yet made or a fact not yet verified, tracked as G-NN |
-
----
-
-*End of the read. The appendices below are lookup tables.*
-
----
 
 ## Appendix A. Traceability
 
