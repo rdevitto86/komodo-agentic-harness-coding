@@ -125,6 +125,12 @@ type Janitor interface {
 	Clean(ctx context.Context, dryRun bool, root string, open map[string]bool) ([]CleanItem, error)
 }
 
+// Sweeper removes the remains of runs that ended without cleaning up, in every repository the engine hosts; the engine
+// calls it once at start, after the recovery pass.
+type Sweeper interface {
+	Sweep(ctx context.Context) error
+}
+
 // Extras adds the Metrics Service figures to a status answer; the keys are the StatusData JSON fields.
 type Extras func(ctx context.Context, target string, all bool) map[string]any
 
@@ -179,6 +185,7 @@ type Deps struct {
 	Resource TokenCaps
 	Cleaner  Discarder
 	Janitor  Janitor
+	Sweeper  Sweeper
 	Extras   Extras
 	Clock    Clock
 	Timing   Timing

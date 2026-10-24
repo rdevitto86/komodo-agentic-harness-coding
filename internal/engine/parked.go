@@ -65,6 +65,16 @@ func (m *Manager) RearmOverrides(ctx context.Context) {
 	}
 }
 
+// sweepAtStart runs the start-up sweep once; a failure is reported and never stops the engine.
+func (m *Manager) sweepAtStart(ctx context.Context) {
+	if m.d.Sweeper == nil {
+		return
+	}
+	if err := m.d.Sweeper.Sweep(ctx); err != nil {
+		m.reportErr("", "", fmt.Errorf("sweep at start: %w", err))
+	}
+}
+
 // awaitsOverride reports whether a group waits for a person to override within a window.
 func awaitsOverride(s State) bool {
 	return s.Stage == StageBlocked && s.Block.Reason == state.ReasonRetries && !s.Block.Until.IsZero()

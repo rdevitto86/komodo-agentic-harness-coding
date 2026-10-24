@@ -144,6 +144,34 @@ func (h *hub) Discard(ctx context.Context, repo, root, group string) error {
 // Clean sweeps the repository the request names, every repository a lease leaves behind, and every repository this engine
 // has served.
 func (h *hub) Clean(ctx context.Context, dryRun bool, root string, _ map[string]bool) ([]engine.CleanItem, error) {
+	var out []engine.CleanItem
+	for _, k := range h.hosted(root) {
+		items, err := janitor{k.cleanup}.Clean(ctx, dryRun, nil)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, items...)
+	}
+
+	return out, nil
+}
+
+// Sweep runs the start-up sweep, never the stale-plan clean, in every repository the engine hosts; a failure in one
+// repository does not stop the others.
+func (h *hub) Sweep(ctx context.Context) error {
+	var errs []error
+	for _, k := range h.hosted("") {
+		if _, err := k.cleanup.Sweep(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("sweep %s: %w", k.id, err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// hosted opens the kit of the named root and of every repository a lease leaves behind, and returns every kit the engine
+// has served.
+func (h *hub) hosted(root string) []*repoKit {
 	roots := map[string]string{}
 	if root != "" {
 		roots[root] = ""
@@ -158,23 +186,14 @@ func (h *hub) Clean(ctx context.Context, dryRun bool, root string, _ map[string]
 	}
 
 	h.s.kitMu.Lock()
+	defer h.s.kitMu.Unlock()
 
 	kits := make([]*repoKit, 0, len(h.s.kits))
 	for _, k := range h.s.kits {
 		kits = append(kits, k)
 	}
-	h.s.kitMu.Unlock()
 
-	var out []engine.CleanItem
-	for _, k := range kits {
-		items, err := janitor{k.cleanup}.Clean(ctx, dryRun, nil)
-		if err != nil {
-			return out, err
-		}
-		out = append(out, items...)
-	}
-
-	return out, nil
+	return kits
 }
 
 // cacheStore opens and closes the cache of each repository.
@@ -241,7 +260,7 @@ func (s *stack) buildEngine(ctx context.Context) (*engine.Engine, error) {
 		Contexts: ctxAdapter{},
 		Tasks:    h, Tools: s.tools, Plans: newPlanSource(s.home, s.repoIDOf), Git: epicGit{s.git}, Commits: h, Resource: res,
 		Version: version, Home: s.home, BaseBranch: s.baseBranch, Remote: s.remote, Faults: s.faults,
-		Cleaner: h, Janitor: h, Parked: s.parkedGroups,
+		Cleaner: h, Janitor: h, Sweeper: h, Parked: s.parkedGroups,
 		Errors: func(run, group string, err error) { s.logln("komodo engine:", run, group, err) },
 	}
 	eng := engine.NewEngine(d, filepath.Join(s.home, "state", engine.SocketName))

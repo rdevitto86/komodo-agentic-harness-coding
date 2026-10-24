@@ -93,6 +93,7 @@ func (e *Engine) Serve(ctx context.Context) error {
 	}
 
 	e.m.RearmOverrides(runCtx)
+	e.m.spawn(func() { e.m.sweepAtStart(runCtx) })
 	e.m.spawn(func() { e.beatLoop(runCtx) })
 	e.m.spawn(func() { e.q.loop(runCtx) })
 	e.m.spawn(func() { e.watchChanges(runCtx) })
