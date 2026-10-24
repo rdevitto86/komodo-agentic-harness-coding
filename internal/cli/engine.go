@@ -70,9 +70,24 @@ func (e *SocketEngine) Send(ctx context.Context, r engine.Request) (<-chan engin
 	}
 
 	line = append(line, '\n')
+
+	// An engine that passed its exit check closes the connection it accepted; the write then fails and a new engine takes
+	// the request.
 	if _, err := conn.Write(line); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("write request: %w", err)
+		if !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+			return nil, fmt.Errorf("write request: %w", err)
+		}
+
+		time.Sleep(e.Redial)
+
+		if conn, err = e.connect(ctx); err != nil {
+			return nil, err
+		}
+		if _, err := conn.Write(line); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("write request: %w", err)
+		}
 	}
 
 	ch := make(chan engine.Reply, 16)

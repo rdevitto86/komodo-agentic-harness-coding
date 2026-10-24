@@ -136,3 +136,22 @@ func TestRiskyGroupBlocksThenLandsOnApprove(t *testing.T) {
 		return groupHas(evs, risky, "run-status", "group.resumed")
 	})
 }
+
+// Group rewrite: `komodo run <plan id> <group> "<prompt>"` on a group that has not started rewrites it in place, then
+// runs it to completion.
+func TestRewriteNotStartedGroupRunsAfterPlanning(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, _ := r.planGoal("add an Add function to the tiny package")
+	before := r.model.callCounts()["planner"]
+
+	res := r.komodo(90*time.Second, "run", id, fixtureGroup, "add a doc comment to Add")
+	if res.code != 0 {
+		t.Fatalf("komodo run %s %s exited %d\nstdout: %s\nstderr: %s", id, fixtureGroup, res.code, res.stdout, res.stderr)
+	}
+
+	if got := r.model.callCounts()["planner"]; got <= before {
+		t.Fatalf("the rewrite made no planner call (%d before, %d after)", before, got)
+	}
+
+	r.waitDone(120 * time.Second)
+}
