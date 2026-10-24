@@ -85,6 +85,11 @@ func WriteBlueprint(home string, b Blueprint) error {
 		return fmt.Errorf("create the plan folder %s: %w", dir, err)
 	}
 
+	return writeBlueprintIn(dir, b)
+}
+
+// writeBlueprintIn writes blueprint.json into dir through a temporary file and one rename.
+func writeBlueprintIn(dir string, b Blueprint) error {
 	data, err := json.MarshalIndent(b, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode the blueprint of %s: %w", b.Plan, err)

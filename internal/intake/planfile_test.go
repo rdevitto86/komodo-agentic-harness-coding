@@ -77,7 +77,7 @@ func TestParsePlanFile(t *testing.T) {
 		}
 
 		g2 := b.Groups[1]
-		if g2.Subsystem != "none" || g2.Priority != PriorityNormal || g2.ID != "" ||
+		if g2.Subsystem != "none" || g2.Priority != PriorityNormal || g2.ID != "0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f31" ||
 			!reflect.DeepEqual(g2.Dependencies, []string{"tg-1"}) {
 			t.Fatalf("group 2 = %+v", g2)
 		}

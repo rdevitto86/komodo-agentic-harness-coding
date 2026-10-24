@@ -3,7 +3,10 @@ package intake
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,21 +27,22 @@ func (b readyBus) Subscribe(name string, types ...bus.Type) (*bus.Subscription, 
 	return s, err
 }
 
-func TestRunPublishesOneRunStartWithItsOwnRunID(t *testing.T) {
+func TestRunPublishesOneWrittenAndNoRunStart(t *testing.T) {
 	r := newRig(t, twoGroupDraft())
 	out, plan := runRig(t, r)
-	plan(PlanRequest{Goal: "g"}, "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57")
+	run := bus.ID("0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57")
+	plan(PlanRequest{Goal: "g"}, run)
 	e := next(t, out)
-	rs, ok := e.Data.(*bus.RunStart)
-	if e.Type != bus.TypeRunStart || !ok {
+	w, ok := e.Data.(*PlanWritten)
+	if e.Type != bus.TypePlan || e.Subtype != "written" || !ok {
 		t.Fatalf("event: %+v", e)
 	}
-	if rs.Source != "intake" || rs.Target != "ep-1" || !slices.Equal(rs.Groups, []string{"tg-1.1", "tg-1.2"}) ||
-		rs.Repo != "github.com/acme/shop" || rs.Root != r.root || rs.CommonDir == "" {
-		t.Fatalf("data: %+v", rs)
+	if !planIDShape.MatchString(w.Plan) || w.Path != filepath.Join(r.plans(), w.Plan, "plan.md") ||
+		!slices.Equal(w.Groups, []string{"tg-1", "tg-2"}) || e.Run != run {
+		t.Fatalf("data: %+v run %q", w, e.Run)
 	}
-	if e.Run == "" || e.Run == "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57" || !uuid7.MatchString(string(e.Run)) {
-		t.Fatalf("run id: %q", e.Run)
+	if files := planFiles(t, r.home); len(files) != 2 || r.repoFiles() != 0 {
+		t.Fatalf("files under the home %v, in the repository %d", files, r.repoFiles())
 	}
 	select {
 	case extra := <-out.Events:
@@ -48,17 +52,18 @@ func TestRunPublishesOneRunStartWithItsOwnRunID(t *testing.T) {
 }
 
 func TestRunHandlesPlansOneAfterAnother(t *testing.T) {
-	r := newRig(t, twoGroupDraft(), draftOf(goodGroup(2, 1, tgSpec{})))
+	r := newRig(t, twoGroupDraft(), newDraft(bpGroup("tg-1")))
 	out, plan := runRig(t, r)
 	plan(PlanRequest{Goal: "first"}, "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b01")
 	plan(PlanRequest{Goal: "second"}, "0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b02")
-	first, second := next(t, out).Data.(*bus.RunStart), next(t, out).Data.(*bus.RunStart)
-	if first.Target != "ep-1" || second.Target != "ep-2" || !slices.Equal(second.Groups, []string{"tg-2.1"}) {
-		t.Fatalf("targets %q %q", first.Target, second.Target)
+	first, second := next(t, out).Data.(*PlanWritten), next(t, out).Data.(*PlanWritten)
+	if first.Plan == second.Plan || !slices.Equal(first.Groups, []string{"tg-1", "tg-2"}) ||
+		!slices.Equal(second.Groups, []string{"tg-1"}) {
+		t.Fatalf("plans %+v %+v", first, second)
 	}
 }
 
-func TestRunPublishesPlanBlockedAndNoRunStart(t *testing.T) {
+func TestRunPublishesPlanBlockedAndNoWritten(t *testing.T) {
 	r := newRig(t, badDraft(), badDraft(), badDraft())
 	out, plan := runRig(t, r)
 	run := bus.ID("0192e4c5-6f00-7a21-8c3b-2d9e0f1a4b57")
@@ -69,6 +74,19 @@ func TestRunPublishesPlanBlockedAndNoRunStart(t *testing.T) {
 		e.Run != run {
 		t.Fatalf("event: %+v", e)
 	}
+}
+
+// planFiles lists the files under the plan folders of a home.
+func planFiles(t *testing.T, home string) []string {
+	t.Helper()
+	var out []string
+	_ = filepath.WalkDir(filepath.Join(home, "plans"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out
 }
 
 func TestRunPublishesTheErrorEachFailureMapsTo(t *testing.T) {
@@ -104,11 +122,17 @@ func TestFaultDataMapsAWriteFailure(t *testing.T) {
 	if pl, ok := faultData(LockedError{Run: "r1"}, 1).(*PlanLocked); !ok || pl.Run != "r1" {
 		t.Fatalf("locked: %+v", pl)
 	}
+	if msg := (LockedError{Run: "r1"}).Error(); !strings.Contains(msg, "r1") {
+		t.Fatalf("message: %q", msg)
+	}
 }
 
 func TestRegisterEventsBindsEveryPair(t *testing.T) {
 	registerOnce.Do(RegisterEvents)
-	for _, p := range []bus.Payload{&PlanRequest{}, &PlanBlocked{}, &PlanTimeout{}, &PlanInput{}, &PlanLocked{}, &PlanWrite{}} {
+	payloads := []bus.Payload{
+		&PlanRequest{}, &PlanBlocked{}, &PlanTimeout{}, &PlanInput{}, &PlanLocked{}, &PlanWrite{}, &PlanWritten{},
+	}
+	for _, p := range payloads {
 		b := bus.New(bus.Options{})
 		k := p.EventKey()
 		if err := b.Publish(bus.Event{Type: k.Type, Subtype: k.Subtype, Run: newID(), Data: p}); err != nil {
@@ -118,12 +142,12 @@ func TestRegisterEventsBindsEveryPair(t *testing.T) {
 	}
 }
 
-// runRig starts Run on the rig's handler and returns a subscription to run-start and error events.
+// runRig starts Run on the rig's handler and returns a subscription to plan and error events.
 func runRig(t *testing.T, r *rig) (*bus.Subscription, func(PlanRequest, bus.ID)) {
 	t.Helper()
 	ready := make(chan struct{})
 	r.h.d.Bus = readyBus{Bus: r.bus, ready: ready}
-	out, err := r.bus.Subscribe("test", bus.TypeRunStart, bus.TypeError)
+	out, err := r.bus.Subscribe("test", bus.TypePlan, bus.TypeRunStart, bus.TypeError)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,14 +169,18 @@ func runRig(t *testing.T, r *rig) (*bus.Subscription, func(PlanRequest, bus.ID))
 	}
 }
 
-// next returns the next event on the subscription or fails after a wait.
+// next returns the next event on the subscription, skipping the plan request the test published, or fails after a wait.
 func next(t *testing.T, s *bus.Subscription) bus.Event {
 	t.Helper()
-	select {
-	case e := <-s.Events:
-		return e
-	case <-time.After(5 * time.Second):
-		t.Fatal("no event")
+	for {
+		select {
+		case e := <-s.Events:
+			if e.Type == bus.TypePlan && e.Subtype == "request" {
+				continue
+			}
+			return e
+		case <-time.After(5 * time.Second):
+			t.Fatal("no event")
+		}
 	}
-	return bus.Event{}
 }

@@ -114,9 +114,10 @@ func (s *scripted) start(context.Context) (PlannerSession, error) {
 	return s, nil
 }
 
-// rig is a handler wired to fakes over a temporary repository.
+// rig is a handler wired to fakes over a temporary home and a temporary repository.
 type rig struct {
 	t    *testing.T
+	home string
 	root string
 	h    *Handler
 	bus  bus.Bus
@@ -130,10 +131,12 @@ type rig struct {
 func newRig(t *testing.T, steps ...any) *rig {
 	t.Helper()
 	registerOnce.Do(RegisterEvents)
-	r := &rig{t: t, root: t.TempDir(), bus: bus.New(bus.Options{}), ctx: &fakeContext{},
-		sess: &scripted{
-			steps: steps,
-		}, tree: fakeTree{"README.md": "readme", "docs/hld.md": "the design"}, lock: fakeLocks{runs: map[string]string{}}}
+	r := &rig{
+		t: t, home: t.TempDir(), root: t.TempDir(), bus: bus.New(bus.Options{}), ctx: &fakeContext{},
+		sess: &scripted{steps: steps},
+		tree: fakeTree{"README.md": "readme", "docs/hld.md": "the design"},
+		lock: fakeLocks{runs: map[string]string{}},
+	}
 	t.Cleanup(func() { _ = r.bus.Close() })
 	r.h = New(Deps{
 		Bus:       r.bus,
@@ -142,16 +145,20 @@ func newRig(t *testing.T, steps ...any) *rig {
 		Locks:     r.lock,
 		Protected: func() []string { return []string{".github/**"} },
 		Limits:    PlannerLimits{WallMin: 1},
+		Home:      r.home,
 		Root:      r.root,
 		Tree:      func(context.Context) (contextmgr.Tree, error) { return r.tree, nil },
-		Repo:      "github.com/acme/shop", CommonDir: filepath.Join(r.root, ".git"),
+		Repo:      "repo-1", CommonDir: filepath.Join(r.root, ".git"),
 	})
 	return r
 }
 
-// entries lists the names directly under docs/backlog.
+// plans returns the folder that holds the plan folders of the rig's repository.
+func (r *rig) plans() string { return filepath.Join(r.home, "plans", "repo-1") }
+
+// entries lists the names directly under the plans folder of the repository.
 func (r *rig) entries() []string {
-	es, _ := os.ReadDir(r.backlog(""))
+	es, _ := os.ReadDir(r.plans())
 	var out []string
 	for _, e := range es {
 		out = append(out, e.Name())
@@ -159,312 +166,420 @@ func (r *rig) entries() []string {
 	return out
 }
 
-// backlog returns the path of a file under docs/backlog.
-func (r *rig) backlog(rel string) string {
-	return filepath.Join(r.root, "docs", "backlog", filepath.FromSlash(rel))
+// repoFiles counts the files under the repository root.
+func (r *rig) repoFiles() int {
+	n := 0
+	_ = filepath.WalkDir(r.root, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	return n
 }
 
-func TestPlanWritesAPassingDraft(t *testing.T) {
-	r := newRig(t, twoGroupDraft())
-	res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "Add revocation", Docs: []string{"docs/hld.md"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Epic != 1 || !slices.Equal(res.Groups, []string{"tg-1.1", "tg-1.2"}) {
-		t.Fatalf("result: %+v", res)
-	}
-	if !slices.Contains(res.Written, "docs/backlog/epic-1/tg-1.2/TG.md") || len(res.Written) != 4 {
-		t.Fatalf("written: %v", res.Written)
-	}
-	if b, err := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); err != nil || string(b) != twoGroupDraft().Files[0].Content {
-		t.Fatalf("file: %v", err)
-	}
-	epics, fs := mustLoad(t, r.root)
-	if len(fs) != 0 || len(epics) != 1 {
-		t.Fatalf("reload: %+v %+v", epics, fs)
-	}
-	for _, g := range epics[0].Groups {
-		want, _ := cardHashDir(r.root, g)
-		if res.Hashes[g.Name] != want || want == "" {
-			t.Fatalf("hash of %s: %q want %q", g.Name, res.Hashes[g.Name], want)
+func TestPlan(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a passing draft writes plan.md and blueprint.json under the home", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "Add revocation", Docs: []string{"docs/hld.md"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !planIDShape.MatchString(res.Plan) || !slices.Equal(res.Groups, []string{"tg-1", "tg-2"}) {
+			t.Fatalf("result: %+v", res)
+		}
+		dir := filepath.Join(r.plans(), res.Plan)
+		if res.Path != filepath.Join(dir, "plan.md") {
+			t.Fatalf("path %s", res.Path)
+		}
+		if got := r.entries(); !slices.Equal(got, []string{res.Plan}) {
+			t.Fatalf("leftovers: %v", got)
+		}
+		if es, _ := os.ReadDir(dir); len(es) != 2 || es[0].Name() != "blueprint.json" || es[1].Name() != "plan.md" {
+			t.Fatalf("plan folder: %v", es)
+		}
+		if n := r.repoFiles(); n != 0 {
+			t.Fatalf("%d files written in the repository", n)
+		}
+		text, err := os.ReadFile(res.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, found := Parse(string(text))
+		if len(found) != 0 || b.Plan != res.Plan || !uuid7.MatchString(b.Groups[0].ID) || b.Groups[0].ID == b.Groups[1].ID {
+			t.Fatalf("plan.md: %s %+v", findingText(found), b)
+		}
+		stored, err := LoadBlueprint(r.home, "repo-1", res.Plan)
+		if err != nil || stored.Repo != "repo-1" || stored.Plan != res.Plan {
+			t.Fatalf("blueprint: %+v %v", stored, err)
+		}
+		for _, g := range stored.Groups {
+			want, _ := CardHash(string(text), g)
+			if res.Hashes[g.Name] != want || g.Hash != want || want == "" {
+				t.Fatalf("hash of %s: %q %q want %q", g.Name, res.Hashes[g.Name], g.Hash, want)
+			}
+		}
+		if _, found, err := Approve(r.home, "repo-1", res.Plan, nil, nil); err != nil || len(fails(found)) != 0 {
+			t.Fatalf("approve: %v %s", err, findingText(found))
+		}
+		if r.ctx.req.Agent != "planner" || r.ctx.req.Slots[contextmgr.Goal] != "Add revocation" ||
+			!strings.Contains(r.ctx.req.Slots[contextmgr.Specs], "the design") {
+			t.Fatalf("request: %+v", r.ctx.req)
+		}
+		if len(r.sess.texts) != 1 || !strings.Contains(r.sess.texts[0], "BRIEF Add revocation") || r.sess.closed != 1 {
+			t.Fatalf("session: %+v", r.sess)
+		}
+	})
+
+	t.Run("a group id in the draft is kept", func(t *testing.T) {
+		t.Parallel()
+		g := bpGroup("tg-1")
+		g.ID = uid(1)
+		r := newRig(t, draftOfPlan(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []PlanGroup{g}}))
+		res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := LoadBlueprint(r.home, "repo-1", res.Plan); b.Groups[0].ID != uid(1) {
+			t.Fatalf("id %q", b.Groups[0].ID)
+		}
+	})
+
+	t.Run("a failing draft writes nothing and the retry gets the finding text", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, badDraft(), twoGroupDraft())
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(r.sess.texts) != 2 || !strings.Contains(r.sess.texts[1], "plan.md#tg-1/tsk-one") ||
+			!strings.Contains(r.sess.texts[1], "ears") {
+			t.Fatalf("texts: %q", r.sess.texts)
+		}
+		if r.sess.started != 1 {
+			t.Fatalf("sessions: %d", r.sess.started)
+		}
+	})
+
+	t.Run("the third failure blocks, saves the draft and writes no plan", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, badDraft(), badDraft(), badDraft())
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var blocked PlanBlockedError
+		if !errors.As(err, &blocked) || len(blocked.Findings) == 0 || !strings.Contains(blocked.Error(), "finding") {
+			t.Fatalf("err: %v", err)
+		}
+		if len(r.sess.texts) != 3 || r.sess.closed != 1 {
+			t.Fatalf("sends: %d closed %d", len(r.sess.texts), r.sess.closed)
+		}
+		b, err := os.ReadFile(filepath.Join(blocked.DraftPath, "plan.md"))
+		if err != nil || string(b) != badDraft().Files[0].Content {
+			t.Fatalf("saved draft: %v", err)
+		}
+		if filepath.Dir(blocked.DraftPath) != r.plans() ||
+			!strings.HasPrefix(filepath.Base(blocked.DraftPath), ".plan-failed-") {
+			t.Fatalf("draft path: %s", blocked.DraftPath)
+		}
+		if n := r.repoFiles(); n != 0 {
+			t.Fatalf("%d files written in the repository", n)
+		}
+	})
+
+	t.Run("a blocked draft with an unsafe path stays inside its folder", func(t *testing.T) {
+		t.Parallel()
+		d := badDraft()
+		d.Files = append(d.Files, DraftFile{Path: "../../escape.md", Content: "x"}, DraftFile{Path: "/", Content: "y"})
+		r := newRig(t, d, d, d)
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var blocked PlanBlockedError
+		if !errors.As(err, &blocked) {
+			t.Fatalf("err: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(r.home, "plans", "escape.md")); !os.IsNotExist(err) {
+			t.Fatal("an unsafe draft path escaped the folder")
+		}
+	})
+
+	t.Run("a draft that cannot be saved still blocks the plan", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, badDraft(), badDraft(), badDraft())
+		if err := os.MkdirAll(r.plans(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(r.plans(), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(r.plans(), 0o755) })
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var blocked PlanBlockedError
+		if !errors.As(err, &blocked) || blocked.DraftPath != "" {
+			t.Fatalf("err: %v path %q", err, blocked.DraftPath)
+		}
+	})
+
+	t.Run("the deadline ends the plan with no files", func(t *testing.T) {
+		t.Parallel()
+		block := func(ctx context.Context) (PlanDraft, error) { <-ctx.Done(); return PlanDraft{}, ctx.Err() }
+		r := newRig(t, block)
+		r.h.wallUnit = 20 * time.Millisecond
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err: %v", err)
+		}
+		if got := r.entries(); len(got) != 0 || r.sess.closed != 1 {
+			t.Fatalf("entries %v closed %d", got, r.sess.closed)
+		}
+	})
+
+	t.Run("input failures start no session", func(t *testing.T) {
+		t.Parallel()
+		cases := map[string]struct {
+			req   PlanRequest
+			setup func(*rig)
+		}{
+			"no goal and no document": {PlanRequest{}, nil},
+			"missing document":        {PlanRequest{Docs: []string{"docs/none.md"}}, nil},
+			"document outside":        {PlanRequest{Docs: []string{"../x.md"}}, nil},
+			"context refused":         {PlanRequest{Goal: "g"}, func(r *rig) { r.ctx.err = contextmgr.ErrContext }},
+			"tree unreadable": {PlanRequest{Goal: "g"}, func(r *rig) {
+				r.h.d.Tree = func(context.Context) (contextmgr.Tree, error) { return nil, errors.New("no tree") }
+			}},
+		}
+		for name, c := range cases {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				r := newRig(t, twoGroupDraft())
+				if c.setup != nil {
+					c.setup(r)
+				}
+				if _, err := r.h.Plan(context.Background(), c.req); err == nil {
+					t.Fatal("want an error")
+				}
+				if r.sess.started != 0 || len(r.entries()) != 0 {
+					t.Fatalf("session %d entries %v", r.sess.started, r.entries())
+				}
+			})
+		}
+	})
+
+	t.Run("a session that cannot start or fails ends the plan", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, errors.New("model unreachable"))
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		if err == nil || !strings.Contains(err.Error(), "model unreachable") {
+			t.Fatalf("err: %v", err)
+		}
+		if r.sess.closed != 1 || len(r.entries()) != 0 {
+			t.Fatalf("closed %d entries %v", r.sess.closed, r.entries())
+		}
+		r = newRig(t)
+		r.h.d.Start = func(context.Context) (PlannerSession, error) { return nil, errors.New("no session") }
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err == nil ||
+			!strings.Contains(err.Error(), "no session") {
+			t.Fatalf("start err: %v", err)
+		}
+	})
+
+	t.Run("a failed rename leaves no staging folder and no plan", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		r.h.rename = func(string, string) error { return errors.New("disk gone") }
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var w writeError
+		if !errors.As(err, &w) || !strings.Contains(err.Error(), "disk gone") {
+			t.Fatalf("err: %v", err)
+		}
+		if got := r.entries(); len(got) != 0 {
+			t.Fatalf("entries: %v", got)
+		}
+	})
+
+	t.Run("a home that cannot hold plans is a write failure", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		if err := os.WriteFile(filepath.Join(r.home, "plans"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var w writeError
+		if !errors.As(err, &w) {
+			t.Fatalf("err: %v", err)
+		}
+	})
+
+	t.Run("a plans folder that cannot take a staging folder is a write failure", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		if err := os.MkdirAll(r.plans(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(r.plans(), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(r.plans(), 0o755) })
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var w writeError
+		if !errors.As(err, &w) {
+			t.Fatalf("err: %v", err)
+		}
+	})
+
+	t.Run("a repository id that leaves the plans folder is a write failure", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		r.h.d.Repo = "github.com/acme/shop"
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var w writeError
+		if !errors.As(err, &w) || len(r.entries()) != 0 {
+			t.Fatalf("err: %v", err)
+		}
+	})
+
+	t.Run("a request to amend an epic is refused until plans change shape", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1}); err == nil || r.sess.started != 0 {
+			t.Fatalf("err %v sessions %d", err, r.sess.started)
+		}
+	})
+
+	t.Run("the lint tool gives the findings LintDraft gives", func(t *testing.T) {
+		t.Parallel()
+		var fromTool []Finding
+		var r *rig
+		probe := func(context.Context) (PlanDraft, error) {
+			fromTool = r.h.LintPlan(badDraft())
+			return twoGroupDraft(), nil
+		}
+		r = newRig(t, probe)
+		if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
+			t.Fatal(err)
+		}
+		want := LintDraft(badDraft(), Blueprint{}, []string{".github/**"}, []string{"README.md", "docs/hld.md"})
+		if len(want) == 0 || fmt.Sprint(fromTool) != fmt.Sprint(want) {
+			t.Fatalf("tool %+v\nwant %+v", fromTool, want)
+		}
+		if got := r.h.LintPlan(badDraft()); len(got) == 0 {
+			t.Fatal("the tool outside a plan found nothing")
+		}
+	})
+}
+
+func TestRestoreOrphans(t *testing.T) {
+	t.Parallel()
+
+	aside := func(t *testing.T, r *rig, name, plan string) {
+		t.Helper()
+		b := bpPlan(bpGroup("tg-1"))
+		b.Plan, b.Repo = plan, "repo-1"
+		if err := WriteBlueprint(r.home, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(PlanDir(r.home, "repo-1", plan), filepath.Join(r.plans(), name)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if got := r.entries(); !slices.Equal(got, []string{"epic-1"}) {
-		t.Fatalf("leftovers: %v", got)
-	}
-	if r.ctx.req.Agent != "planner" || r.ctx.req.Slots[contextmgr.Goal] != "Add revocation" ||
-		!strings.Contains(r.ctx.req.Slots[contextmgr.Specs], "the design") {
-		t.Fatalf("request: %+v", r.ctx.req)
-	}
-	if len(r.sess.texts) != 1 || !strings.Contains(r.sess.texts[0], "BRIEF Add revocation") || r.sess.closed != 1 {
-		t.Fatalf("session: %+v", r.sess)
-	}
-}
 
-func TestFailingDraftWritesNothingAndPassingRetryGetsTheText(t *testing.T) {
-	r := newRig(t, badDraft(), twoGroupDraft())
-	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.sess.texts) != 2 || !strings.Contains(r.sess.texts[1], "epic-1/tg-1.1/TG.md") ||
-		!strings.Contains(r.sess.texts[1], "ears") {
-		t.Fatalf("texts: %q", r.sess.texts)
-	}
-	if r.sess.started != 1 {
-		t.Fatalf("sessions: %d", r.sess.started)
-	}
-}
-
-func TestThirdFailureBlocksWithZeroFiles(t *testing.T) {
-	r := newRig(t, badDraft(), badDraft(), badDraft())
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
-	var blocked PlanBlockedError
-	if !errors.As(err, &blocked) || len(blocked.Findings) == 0 {
-		t.Fatalf("err: %v", err)
-	}
-	if !strings.Contains(blocked.Error(), "finding") {
-		t.Fatalf("message: %q", blocked.Error())
-	}
-	if len(r.sess.texts) != 3 || r.sess.closed != 1 {
-		t.Fatalf("sends: %d closed %d", len(r.sess.texts), r.sess.closed)
-	}
-	if _, err := os.Stat(r.backlog("epic-1")); !os.IsNotExist(err) {
-		t.Fatal("a blocked plan wrote an epic")
-	}
-	b, err := os.ReadFile(filepath.Join(blocked.DraftPath, "epic-1", "tg-1.1", "TG.md"))
-	if err != nil || string(b) != badDraft().Files[0].Content {
-		t.Fatalf("saved draft: %v", err)
-	}
-	if !strings.HasPrefix(filepath.Base(blocked.DraftPath), ".plan-failed-") {
-		t.Fatalf("draft path: %s", blocked.DraftPath)
-	}
-	// Load ignores the saved draft.
-	if epics, fs := mustLoad(t, r.root); len(epics) != 0 || len(fs) != 0 {
-		t.Fatalf("load saw the failed draft: %+v %+v", epics, fs)
-	}
-}
-
-func TestBlockedDraftWithUnsafePathStaysInsideItsFolder(t *testing.T) {
-	d := badDraft()
-	d.Files = append(d.Files, DraftFile{Path: "../../escape.md", Content: "x"})
-	r := newRig(t, d, d, d)
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
-	var blocked PlanBlockedError
-	if !errors.As(err, &blocked) {
-		t.Fatalf("err: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(r.root, "escape.md")); !os.IsNotExist(err) {
-		t.Fatal("an unsafe draft path escaped the folder")
-	}
-}
-
-func TestDeadlineEndsThePlanWithZeroFiles(t *testing.T) {
-	block := func(ctx context.Context) (PlanDraft, error) { <-ctx.Done(); return PlanDraft{}, ctx.Err() }
-	r := newRig(t, block)
-	r.h.wallUnit = 20 * time.Millisecond
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err: %v", err)
-	}
-	if got := r.entries(); len(got) != 0 || r.sess.closed != 1 {
-		t.Fatalf("entries %v closed %d", got, r.sess.closed)
-	}
-}
-
-func TestPlanInputFailuresStartNoSession(t *testing.T) {
-	cases := map[string]struct {
-		req   PlanRequest
-		setup func(*rig)
-	}{
-		"no goal and no document": {PlanRequest{}, nil},
-		"missing document":        {PlanRequest{Docs: []string{"docs/none.md"}}, nil},
-		"document outside":        {PlanRequest{Docs: []string{"../x.md"}}, nil},
-		"unknown epic":            {PlanRequest{Goal: "g", Epic: 4}, nil},
-		"context refused":         {PlanRequest{Goal: "g"}, func(r *rig) { r.ctx.err = contextmgr.ErrContext }},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			r := newRig(t, twoGroupDraft())
-			if c.setup != nil {
-				c.setup(r)
-			}
-			if _, err := r.h.Plan(context.Background(), c.req); err == nil {
-				t.Fatal("want an error")
-			}
-			if r.sess.started != 0 || len(r.entries()) != 0 {
-				t.Fatalf("session %d entries %v", r.sess.started, r.entries())
-			}
-		})
-	}
-}
-
-func TestLockCheckFailsClosed(t *testing.T) {
-	r := newRig(t, twoGroupDraft())
-	writeBacklog(t, r.root, goodGroup(1, 1, tgSpec{}))
-	r.lock.err = errors.New("state unreadable")
-	r.h.d.Locks = r.lock
-	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1}); err == nil || r.sess.started != 0 {
-		t.Fatalf("err %v sessions %d", err, r.sess.started)
-	}
-}
-
-func TestAmendedPlanNamingAGroupInARunIsLocked(t *testing.T) {
-	old := goodGroup(1, 1, tgSpec{})
-	r := newRig(t, draftOf(goodGroup(1, 1, tgSpec{goal: "Changed"})))
-	writeBacklog(t, r.root, old)
-	r.lock.runs[uid(101)] = "run-9"
-	r.h.d.Locks = r.lock
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1})
-	var locked LockedError
-	if !errors.As(err, &locked) || locked.Run != "run-9" || !strings.Contains(locked.Error(), "run-9") {
-		t.Fatalf("err: %v", err)
-	}
-	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); string(b) != old[0].Content {
-		t.Fatal("a locked group changed")
-	}
-	if !strings.Contains(r.ctx.req.Slots[contextmgr.Plan], "run-9") {
-		t.Fatalf("backlog slot: %q", r.ctx.req.Slots[contextmgr.Plan])
-	}
-}
-
-func TestAmendedPlanReplacesAGroupAndAddsOne(t *testing.T) {
-	keep := goodGroup(1, 2, tgSpec{})
-	r := newRig(t, draftOf(goodGroup(1, 1, tgSpec{goal: "Changed"}), goodGroup(1, 3, tgSpec{deps: []string{"tg-1.2"}})))
-	writeBacklog(t, r.root, cat(goodGroup(1, 1, tgSpec{}), keep))
-	res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Epic != 1 || !slices.Equal(res.Groups, []string{"tg-1.1", "tg-1.3"}) {
-		t.Fatalf("result: %+v", res)
-	}
-	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); !strings.Contains(string(b), "goal: Changed") {
-		t.Fatal("amended group not replaced")
-	}
-	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.2/TG.md")); string(b) != keep[0].Content {
-		t.Fatal("untouched group changed")
-	}
-	if got := r.entries(); !slices.Equal(got, []string{"epic-1"}) {
-		t.Fatalf("leftovers: %v", got)
-	}
-}
-
-func TestEpicNumberRules(t *testing.T) {
-	cases := map[string]struct {
-		req  PlanRequest
-		have []DraftFile
-		draf PlanDraft
-	}{
-		"new epic must be highest plus one": {
-			PlanRequest{Goal: "g"},
-			goodGroup(1, 1, tgSpec{}),
-			draftOf(goodGroup(3, 1, tgSpec{})),
-		},
-		"new epic may not reuse a number": {
-			PlanRequest{Goal: "g"},
-			goodGroup(1, 1, tgSpec{}),
-			draftOf(goodGroup(1, 2, tgSpec{})),
-		},
-		"amend stays in its epic": {
-			PlanRequest{Goal: "g", Epic: 1},
-			goodGroup(1, 1, tgSpec{}),
-			draftOf(goodGroup(2, 1, tgSpec{})),
-		},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			r := newRig(t, c.draf, c.draf, c.draf)
-			writeBacklog(t, r.root, c.have)
-			_, err := r.h.Plan(context.Background(), c.req)
-			var blocked PlanBlockedError
-			if !errors.As(err, &blocked) || len(rulesOf(blocked.Findings, RuleGrammar, SeverityFail)) == 0 {
-				t.Fatalf("err: %v", err)
-			}
-		})
-	}
-}
-
-func TestRenameFailureRestoresTheOldGroup(t *testing.T) {
-	old := goodGroup(1, 1, tgSpec{})
-	r := newRig(t, draftOf(goodGroup(1, 1, tgSpec{goal: "Changed"})))
-	writeBacklog(t, r.root, old)
-	calls := 0
-	r.h.rename = func(a, b string) error {
-		calls++
-		if calls == 2 {
-			return errors.New("disk gone")
+	t.Run("the next plan restores an old folder whose place is empty", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		aside(t, r, ".plan-old-x", "plan-aaaaaa")
+		res, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return os.Rename(a, b)
-	}
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g", Epic: 1})
-	if err == nil || !strings.Contains(err.Error(), "disk gone") {
-		t.Fatalf("err: %v", err)
-	}
-	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); string(b) != old[0].Content {
-		t.Fatal("the old group was not restored")
-	}
-	if got := r.entries(); !slices.Equal(got, []string{"epic-1"}) {
-		t.Fatalf("leftovers: %v", got)
-	}
-}
-
-func TestNextPlanRestoresAnOrphanedOldFolder(t *testing.T) {
-	old := goodGroup(1, 1, tgSpec{})
-	r := newRig(t, draftOf(goodGroup(2, 1, tgSpec{})))
-	// A crash between the two renames: the old group sits aside, its place is empty.
-	aside := []DraftFile{
-		{Path: ".plan-old-x/" + old[0].Path, Content: old[0].Content},
-		{Path: ".plan-old-x/" + old[1].Path, Content: old[1].Content},
-	}
-	writeBacklog(t, r.root, aside)
-	// A second crash after the new group went into place: the old copy is dropped.
-	writeBacklog(t, r.root, goodGroup(1, 2, tgSpec{goal: "New"}))
-	writeBacklog(t, r.root, []DraftFile{{Path: ".plan-old-y/epic-1/tg-1.2/TG.md", Content: "stale"}})
-	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
-		t.Fatal(err)
-	}
-	if b, err := os.ReadFile(r.backlog("epic-1/tg-1.1/TG.md")); err != nil || string(b) != old[0].Content {
-		t.Fatalf("old group not restored: %v", err)
-	}
-	if b, _ := os.ReadFile(r.backlog("epic-1/tg-1.2/TG.md")); !strings.Contains(string(b), "goal: New") {
-		t.Fatal("the new group was overwritten by the stale copy")
-	}
-	for _, n := range r.entries() {
-		if strings.HasPrefix(n, ".plan-old-") {
-			t.Fatalf("left %s", n)
+		got := r.entries()
+		if len(got) != 2 || !slices.Contains(got, "plan-aaaaaa") || !slices.Contains(got, res.Plan) {
+			t.Fatalf("entries: %v", got)
 		}
-	}
-}
+		if _, err := LoadBlueprint(r.home, "repo-1", "plan-aaaaaa"); err != nil {
+			t.Fatalf("old plan not restored: %v", err)
+		}
+	})
 
-func TestSessionErrorFailsThePlan(t *testing.T) {
-	r := newRig(t, errors.New("model unreachable"))
-	_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
-	if err == nil || !strings.Contains(err.Error(), "model unreachable") {
-		t.Fatalf("err: %v", err)
-	}
-	if r.sess.closed != 1 || len(r.entries()) != 0 {
-		t.Fatalf("closed %d entries %v", r.sess.closed, r.entries())
-	}
-}
+	t.Run("an old folder whose place is filled is dropped", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		aside(t, r, ".plan-old-y", "plan-bbbbbb")
+		b := bpPlan(bpGroup("tg-1"))
+		b.Plan, b.Repo = "plan-bbbbbb", "repo-1"
+		b.Goal = "the new one"
+		if err := WriteBlueprint(r.home, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := restoreOrphans(r.home, "repo-1"); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.entries(); !slices.Equal(got, []string{"plan-bbbbbb"}) {
+			t.Fatalf("entries: %v", got)
+		}
+		if got, _ := LoadBlueprint(r.home, "repo-1", "plan-bbbbbb"); got.Goal != "the new one" {
+			t.Fatalf("the new plan was overwritten: %+v", got)
+		}
+	})
 
-func TestPlanLintToolMatcheslintDraftBacklog(t *testing.T) {
-	var fromTool []Finding
-	var r *rig
-	probe := func(context.Context) (PlanDraft, error) {
-		fromTool = r.h.LintBacklog(badDraft())
-		return twoGroupDraft(), nil
-	}
-	r = newRig(t, probe)
-	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
-		t.Fatal(err)
-	}
-	want := lintDraftBacklog(badDraft(), nil, []string{".github/**"}, []string{"README.md", "docs/hld.md"})
-	if len(want) == 0 || fmt.Sprint(fromTool) != fmt.Sprint(want) {
-		t.Fatalf("tool %+v\nwant %+v", fromTool, want)
-	}
+	t.Run("the plan id comes from plan.md when blueprint.json is gone", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		dir := filepath.Join(r.plans(), ".plan-old-z")
+		b := bpPlan(bpGroup("tg-1"))
+		b.Plan = "plan-cccccc"
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte(Render(b)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := restoreOrphans(r.home, "repo-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(r.plans(), "plan-cccccc", "plan.md")); err != nil {
+			t.Fatalf("not restored: %v", err)
+		}
+	})
+
+	t.Run("a folder with no readable plan id stays for a person", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		dir := filepath.Join(r.plans(), ".plan-old-q")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := restoreOrphans(r.home, "repo-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("folder removed: %v", err)
+		}
+	})
+
+	t.Run("a missing plans folder is nothing to restore", func(t *testing.T) {
+		t.Parallel()
+		if err := restoreOrphans(t.TempDir(), "repo-1"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a rename that fails stops the plan", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t, twoGroupDraft())
+		aside(t, r, ".plan-old-x", "plan-aaaaaa")
+		if err := os.Chmod(r.plans(), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(r.plans(), 0o755) })
+		_, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"})
+		var w writeError
+		if !errors.As(err, &w) {
+			t.Fatalf("err: %v", err)
+		}
+	})
 }
 
 func TestPlannerRoleHoldsNoWriteTool(t *testing.T) {
+	t.Parallel()
 	for _, tool := range agent.PlannerRole().Tools {
 		for _, bad := range []string{"write", "edit", "run", "git", "bash", "shell"} {
 			if strings.Contains(strings.ToLower(tool), bad) {
@@ -474,17 +589,59 @@ func TestPlannerRoleHoldsNoWriteTool(t *testing.T) {
 	}
 }
 
-func TestDraftFromResultHoldsThePlanText(t *testing.T) {
-	d := DraftFromResult(agent.PlannerResult{Plan: "# Plan"})
-	if len(d.Files) != 1 || d.Files[0] != (DraftFile{Path: "plan.md", Content: "# Plan"}) {
-		t.Fatalf("draft: %+v", d)
-	}
+func TestDraftFromResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the plan text becomes plan.md and its parsed blueprint", func(t *testing.T) {
+		t.Parallel()
+		text := Render(Blueprint{Goal: "Plan goal", Release: "V1", Groups: []PlanGroup{bpGroup("tg-1")}})
+		d := DraftFromResult(agent.PlannerResult{Plan: text})
+		if len(d.Files) != 1 || d.Files[0] != (DraftFile{Path: "plan.md", Content: text}) {
+			t.Fatalf("files: %+v", d.Files)
+		}
+		if d.Blueprint.Goal != "Plan goal" || len(d.Blueprint.Groups) != 1 || d.Blueprint.Groups[0].Name != "tg-1" {
+			t.Fatalf("blueprint: %+v", d.Blueprint)
+		}
+	})
+
+	t.Run("a plan with grammar problems still reaches lint", func(t *testing.T) {
+		t.Parallel()
+		d := DraftFromResult(agent.PlannerResult{Plan: "# Plan"})
+		if len(fails(LintDraft(d, Blueprint{}, nil, nil))) == 0 {
+			t.Fatal("lint passed a plan with no goal")
+		}
+	})
 }
 
-func twoGroupDraft() PlanDraft {
-	return draftOf(goodGroup(1, 1, tgSpec{}), goodGroup(1, 2, tgSpec{deps: []string{"tg-1.1"}}))
+func TestDraftBlueprint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a draft with no parsed blueprint is parsed from plan.md", func(t *testing.T) {
+		t.Parallel()
+		if got := twoGroupDraft().blueprint(); len(got.Groups) != 2 {
+			t.Fatalf("blueprint: %+v", got)
+		}
+	})
+
+	t.Run("a draft with no plan.md has an empty blueprint", func(t *testing.T) {
+		t.Parallel()
+		if got := (PlanDraft{}).blueprint(); got.Goal != "" || len(got.Groups) != 0 {
+			t.Fatalf("blueprint: %+v", got)
+		}
+	})
 }
 
+// newDraft renders groups as the draft of a new plan: no plan id and no group ids.
+func newDraft(groups ...PlanGroup) PlanDraft {
+	return draftOfPlan(Blueprint{Goal: "Plan goal", Release: "V1", Groups: groups})
+}
+
+// twoGroupDraft is a passing draft of two groups, the second waiting on the first.
+func twoGroupDraft() PlanDraft { return newDraft(bpGroup("tg-1"), bpGroup("tg-2", "tg-1")) }
+
+// badDraft is a draft whose acceptance item has no SHALL.
 func badDraft() PlanDraft {
-	return draftOf(goodGroup(1, 1, tgSpec{items: []string{"the system should work"}}))
+	g := bpGroup("tg-1")
+	g.Tasks[0].Acceptance = []Acceptance{{Keyword: "WHEN", Text: "the system should work"}}
+	return newDraft(g)
 }

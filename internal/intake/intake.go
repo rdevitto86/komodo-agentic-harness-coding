@@ -30,6 +30,16 @@ func (r PlanRequest) GitCommonDir() string { return r.CommonDir }
 // EventKey binds PlanRequest to plan / request.
 func (PlanRequest) EventKey() bus.Key { return bus.Key{Type: bus.TypePlan, Subtype: "request"} }
 
+// PlanWritten is the data of plan / written: the plan folder exists and planning has ended.
+type PlanWritten struct {
+	Plan   string   `json:"plan"`   // the plan id
+	Path   string   `json:"path"`   // absolute path of plan.md
+	Groups []string `json:"groups"` // labels of the groups in the plan, in dependency order
+}
+
+// EventKey binds PlanWritten to plan / written.
+func (PlanWritten) EventKey() bus.Key { return bus.Key{Type: bus.TypePlan, Subtype: "written"} }
+
 // PlanBlocked is the data of error / plan-blocked: the third draft failed lint.
 type PlanBlocked struct {
 	Findings  []Finding `json:"findings"`   // the findings of the third draft
@@ -120,28 +130,30 @@ type Deps struct {
 	Protected func() []string
 	// wall clock and returns, from the Agent Registry
 	Limits PlannerLimits
+	// Komodo's home folder, where the plan folders live
+	Home string
 	// repository root
 	Root string
 	// read-only view of the base commit
 	Tree func(ctx context.Context) (contextmgr.Tree, error)
 	// the planner's link chain with measured contexts; sizes the repo map
 	Chain []contextmgr.Candidate
-	// repository id for run-start
+	// repository id, names the plan folder's parent
 	Repo string
-	// git common directory for run-start
+	// git common directory
 	CommonDir string
 	// opens the base commit's runner for one plan; nil skips the fail-first check
 	OpenBase func(ctx context.Context) (BaseRunner, error)
 }
 
-// Handler turns plan requests into task lists and a run-start event.
+// Handler turns plan requests into plan folders and a plan / written event.
 type Handler struct {
 	d        Deps
 	mu       sync.Mutex                          // one plan at a time
 	wallUnit time.Duration                       // length of one WallMin; a test shortens it
 	rename   func(oldPath, newPath string) error // moves a folder into or out of place; a test fails it
 	stateMu  sync.Mutex                          // guards current
-	current  *planState                          // the plan in progress, for the lint_backlog tool
+	current  *planState                          // the plan in progress, for the lint_plan tool
 }
 
 // New returns a Handler; it does not subscribe until Run is called.
@@ -175,14 +187,13 @@ func (h *Handler) Run(ctx context.Context) error {
 	}
 }
 
-// Handle plans one request and publishes run-start on success or the error event the failure maps to. It returns an error
-// only when the bus refuses a publish.
+// Handle plans one request and publishes plan / written on success or the error event the failure maps to. It starts no run
+// and returns an error only when the bus refuses a publish.
 func (h *Handler) Handle(ctx context.Context, run bus.ID, req PlanRequest) error {
 	res, err := h.Plan(ctx, req)
 	if err == nil {
-		return h.d.Bus.Publish(bus.Event{Type: bus.TypeRunStart, Run: newID(), Data: &bus.RunStart{
-			Target: fmt.Sprintf("ep-%d", res.Epic), Groups: res.Groups, Source: "intake",
-			Repo: h.d.Repo, Root: h.d.Root, CommonDir: h.d.CommonDir,
+		return h.d.Bus.Publish(bus.Event{Type: bus.TypePlan, Subtype: "written", Run: run, Data: &PlanWritten{
+			Plan: res.Plan, Path: res.Path, Groups: res.Groups,
 		}})
 	}
 	if ctx.Err() != nil && !errors.Is(err, context.DeadlineExceeded) {
@@ -195,13 +206,13 @@ func (h *Handler) Handle(ctx context.Context, run bus.ID, req PlanRequest) error
 
 // planState is what lint needs about the plan in progress.
 type planState struct {
-	existing []Epic
-	tracked  []string
+	tracked []string // every tracked file of the base commit
 }
 
-// RegisterEvents binds the plan request and the five plan error subtypes to their data structs.
+// RegisterEvents binds the plan request, plan written and the five plan error subtypes to their data structs.
 func RegisterEvents() {
 	bus.Register(PlanRequest{}.EventKey(), func() bus.Payload { return &PlanRequest{} })
+	bus.Register(PlanWritten{}.EventKey(), func() bus.Payload { return &PlanWritten{} })
 	bus.Register(PlanBlocked{}.EventKey(), func() bus.Payload { return &PlanBlocked{} })
 	bus.Register(PlanTimeout{}.EventKey(), func() bus.Payload { return &PlanTimeout{} })
 	bus.Register(PlanInput{}.EventKey(), func() bus.Payload { return &PlanInput{} })

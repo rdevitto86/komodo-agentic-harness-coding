@@ -68,13 +68,6 @@ func (s tgSpec) text(n int) string {
 // uid returns a version 7 identifier that differs per n.
 func uid(n int) string { return fmt.Sprintf("0192e4c5-7a10-7d3e-9b2f-%012x", n) }
 
-// groupWithCheck returns the draft files of group tg-epic.n whose one task has the given done_when command.
-func groupWithCheck(epic, n int, spec tgSpec, doneWhen string) []DraftFile {
-	g := goodGroup(epic, n, spec)
-	g[1].Content = taskText(100, doneWhen, fmt.Sprintf("pkg%d_%d/a.go", epic, n))
-	return g
-}
-
 // goodGroup returns the draft files of group tg-epic.n with one task over its first file.
 func goodGroup(epic, n int, spec tgSpec) []DraftFile {
 	name := fmt.Sprintf("tg-%d.%d", epic, n)

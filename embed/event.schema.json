@@ -1201,6 +1201,32 @@
       ],
       "type": "object"
     },
+    "PlanWritten": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan",
+        "path",
+        "groups"
+      ],
+      "type": "object"
+    },
     "ProviderSkip": {
       "additionalProperties": false,
       "properties": {
@@ -2607,6 +2633,19 @@
         },
         "subtype": {
           "const": "request"
+        },
+        "type": {
+          "const": "plan"
+        }
+      }
+    },
+    {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/PlanWritten"
+        },
+        "subtype": {
+          "const": "written"
         },
         "type": {
           "const": "plan"

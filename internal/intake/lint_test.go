@@ -34,8 +34,14 @@ func bpGroup(name string, deps ...string) PlanGroup {
 	}
 }
 
-// bpPlan returns a valid plan with the given groups.
+// bpPlan returns a valid stored plan with the given groups; a group without an id gets one.
 func bpPlan(groups ...PlanGroup) Blueprint {
+	for i := range groups {
+		if groups[i].ID == "" {
+			groups[i].ID = uid(i + 1)
+		}
+	}
+
 	return Blueprint{Plan: "plan-aaaaaa", Repo: "repo-1", Goal: "Plan goal", Release: "V1", Groups: groups}
 }
 

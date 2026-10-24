@@ -117,7 +117,7 @@ func (h *intakeHolder) lint(draft string) []string {
 	}
 
 	var out []string
-	for _, f := range h.k.intake.LintBacklog(d) {
+	for _, f := range h.k.intake.LintPlan(d) {
 		out = append(out, fmt.Sprint(f))
 	}
 
@@ -193,6 +193,7 @@ func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 		Bus: s.bus, Context: cm, Start: h.start, Locks: groupLocks{k.st},
 		Protected: protectedPaths,
 		Limits:    intake.PlannerLimits{WallMin: ag.Limits.WallMin, IdleMin: ag.Limits.IdleMin},
+		Home:      s.home,
 		Root:      k.root, Tree: func(context.Context) (contextmgr.Tree, error) {
 			return task.NewBaseTree(gitRunner{k.root}, "HEAD"), nil
 		},

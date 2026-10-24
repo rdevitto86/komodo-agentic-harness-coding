@@ -3,7 +3,6 @@ package intake
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -44,10 +43,15 @@ func (r *rig) withBase(exits map[string]int) *fakeBase {
 	return f
 }
 
+// checkDraft is a one-group draft whose one task has the given done_when command.
+func checkDraft(doneWhen string) PlanDraft {
+	g := bpGroup("tg-1")
+	g.Tasks[0].DoneWhen = doneWhen
+	return newDraft(g)
+}
+
 func TestDoneWhenThatPassesOnTheBaseSendsTheDraftBack(t *testing.T) {
-	passing := draftOf(groupWithCheck(1, 1, tgSpec{}, "go vet ./..."))
-	failing := draftOf(groupWithCheck(1, 1, tgSpec{}, "go test ./pkg1_1/..."))
-	r := newRig(t, passing, failing)
+	r := newRig(t, checkDraft("go vet ./..."), checkDraft("go test ./pkg-tg-1/..."))
 	base := r.withBase(map[string]int{"go vet ./...": 0})
 
 	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
@@ -56,7 +60,7 @@ func TestDoneWhenThatPassesOnTheBaseSendsTheDraftBack(t *testing.T) {
 	if len(r.sess.texts) != 2 {
 		t.Fatalf("sends: %d", len(r.sess.texts))
 	}
-	wants := []string{"fail_first", "epic-1/tg-1.1/tsk-one.md", "go vet ./...", "fails until the change is made"}
+	wants := []string{"fail_first", "plan.md#tg-1/tsk-one", "go vet ./...", "fails until the change is made"}
 	for _, want := range wants {
 		if !strings.Contains(r.sess.texts[1], want) {
 			t.Fatalf("finding text lacks %q: %q", want, r.sess.texts[1])
@@ -65,13 +69,13 @@ func TestDoneWhenThatPassesOnTheBaseSendsTheDraftBack(t *testing.T) {
 	if base.opened != 1 || base.closed != 1 || len(base.ran) != 2 {
 		t.Fatalf("opened %d closed %d ran %v", base.opened, base.closed, base.ran)
 	}
-	if _, err := os.Stat(r.backlog("epic-1/tg-1.1/TG.md")); err != nil {
-		t.Fatalf("the accepted draft was not written: %v", err)
+	if len(r.entries()) != 1 {
+		t.Fatalf("the accepted draft was not written: %v", r.entries())
 	}
 }
 
 func TestDoneWhenThatFailsOnTheBaseIsAccepted(t *testing.T) {
-	r := newRig(t, draftOf(groupWithCheck(1, 1, tgSpec{}, "go test ./pkg1_1/...")))
+	r := newRig(t, checkDraft("go test ./pkg-tg-1/..."))
 	base := r.withBase(nil)
 
 	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
@@ -83,7 +87,7 @@ func TestDoneWhenThatFailsOnTheBaseIsAccepted(t *testing.T) {
 }
 
 func TestThirdDraftThatPassesOnTheBaseBlocksThePlan(t *testing.T) {
-	d := draftOf(groupWithCheck(1, 1, tgSpec{}, "go vet ./..."))
+	d := checkDraft("go vet ./...")
 	r := newRig(t, d, d, d)
 	base := r.withBase(map[string]int{"go vet ./...": 0})
 
@@ -95,8 +99,8 @@ func TestThirdDraftThatPassesOnTheBaseBlocksThePlan(t *testing.T) {
 	if len(base.ran) != 1 {
 		t.Fatalf("the same command ran %d times; want 1: %v", len(base.ran), base.ran)
 	}
-	if _, err := os.Stat(r.backlog("epic-1")); !os.IsNotExist(err) {
-		t.Fatal("a blocked plan wrote an epic")
+	if got := r.entries(); len(got) != 1 || !strings.HasPrefix(got[0], ".plan-failed-") {
+		t.Fatalf("a blocked plan wrote a plan folder: %v", got)
 	}
 }
 
@@ -109,6 +113,18 @@ func TestBaseRunsOnlyAfterLintPasses(t *testing.T) {
 	}
 	if base.opened != 1 || len(base.ran) != 1 {
 		t.Fatalf("opened %d ran %v; the failing draft must not reach the base check", base.opened, base.ran)
+	}
+}
+
+func TestTaskWithoutDoneWhenIsNotRunOnTheBase(t *testing.T) {
+	r := newRig(t, checkDraft(""))
+	base := r.withBase(map[string]int{"": 0})
+
+	if _, err := r.h.Plan(context.Background(), PlanRequest{Goal: "g"}); err != nil {
+		t.Fatal(err)
+	}
+	if base.opened != 0 || len(base.ran) != 0 {
+		t.Fatalf("opened %d ran %v", base.opened, base.ran)
 	}
 }
 

@@ -42,6 +42,7 @@ done_when: go vet ./...
 estimate_lines: 20
 
 ## tg-2
+id: 0192e4c5-7a10-7d3e-9b2f-6c1d8e4a5f31
 goal: Revoke a lease
 points: 2
 files: internal/lease/revoke.go

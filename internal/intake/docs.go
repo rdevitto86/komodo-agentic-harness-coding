@@ -31,20 +31,3 @@ func readDocs(tree contextmgr.Tree, docs []string) (string, error) {
 
 	return b.String(), nil
 }
-
-// backlogSummary lists every stored group with its goal and status, marking the groups in a run, for the planner's backlog
-// slot.
-func backlogSummary(epics []Epic, locked map[string]string) string {
-	var lines []string
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			line := fmt.Sprintf("- %s (epic-%d, %s): %s", g.Name, e.Number, g.Status, g.Goal)
-			if run, ok := locked[g.Name]; ok {
-				line += fmt.Sprintf(" [in run %s: do not change]", run)
-			}
-			lines = append(lines, line)
-		}
-	}
-
-	return strings.Join(lines, "\n")
-}

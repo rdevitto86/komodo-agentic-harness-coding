@@ -13,38 +13,39 @@ type baseCheck struct {
 	exits  map[string]int // exit code of each command already run
 }
 
-// findings returns one failing finding per task of the draft whose done_when command exits 0 on the base commit.
-func (b *baseCheck) findings(ctx context.Context, d PlanDraft) ([]Finding, error) {
+// findings returns one failing finding per task of the plan whose done_when command exits 0 on the base commit. A task with
+// no done_when is skipped.
+func (b *baseCheck) findings(ctx context.Context, p Blueprint) ([]Finding, error) {
 	if b.open == nil {
 		return nil, nil
 	}
 
-	epics, _ := parseFiles(d.Files, true)
-
 	var found []Finding
 
-	for _, e := range epics {
-		for _, g := range e.Groups {
-			for _, t := range g.Tasks {
-				exit, err := b.exit(ctx, t.DoneWhen)
-				if err != nil {
-					return nil, err
-				}
-				if exit != 0 {
-					continue
-				}
-
-				found = append(found, Finding{
-					Rule:     RuleFailFirst,
-					Severity: SeverityFail,
-					Path:     fmt.Sprintf("epic-%d/%s/%s.md", e.Number, g.Name, t.Name),
-					Message: fmt.Sprintf(
-						"task %s: done_when %q already passes on the untouched base commit; "+
-							"name a command that fails until the change is made",
-						t.Name, t.DoneWhen,
-					),
-				})
+	for _, g := range p.Groups {
+		for _, t := range g.Tasks {
+			if t.DoneWhen == "" {
+				continue
 			}
+
+			exit, err := b.exit(ctx, t.DoneWhen)
+			if err != nil {
+				return nil, err
+			}
+			if exit != 0 {
+				continue
+			}
+
+			found = append(found, Finding{
+				Rule:     RuleFailFirst,
+				Severity: SeverityFail,
+				Path:     "plan.md#" + g.Name + "/" + t.Name,
+				Message: fmt.Sprintf(
+					"task %s: done_when %q already passes on the untouched base commit; "+
+						"name a command that fails until the change is made",
+					t.Name, t.DoneWhen,
+				),
+			})
 		}
 	}
 

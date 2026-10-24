@@ -187,6 +187,10 @@ func lintPlan(b Blueprint, stored bool, protected, tracked []string) []Finding {
 
 	for _, g := range b.Groups {
 		lintGroup(g, protected, add)
+
+		if stored && g.ID == "" {
+			add(grammar("plan.md#"+g.Name, "id is missing"), g.Name)
+		}
 	}
 
 	nodes := planNodes(b)

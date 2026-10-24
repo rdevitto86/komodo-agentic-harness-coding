@@ -1,5 +1,6 @@
-// Package intake turns a request to plan into task lists: it reads the task-list files, lints them, runs the planner session
-// and writes a plan that passed lint.
+// Package intake turns a request to plan into a plan folder: it runs the planner session, lints its plan.md draft and writes
+// plan.md and blueprint.json under the Komodo home. Load and the Epic types below are the read-only reader of the retired
+// docs/backlog task lists.
 package intake
 
 import (
