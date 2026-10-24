@@ -4,78 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Komodo</title>
-<style>
-:root{--bg:#f1f5f9;--card:#fff;--soft:#f8fafc;--ink:#0f172a;--mute:#64748b;--line:#e2e8f0;
---accent:#4f46e5;--accent-soft:#eef2ff;--red:#dc2626;--red-soft:#fee2e2;--amber:#b45309;--amber-soft:#fef3c7;
---green:#15803d;--green-soft:#dcfce7;--shadow:0 1px 2px rgba(15,23,42,.06),0 6px 18px rgba(15,23,42,.07)}
-@media (prefers-color-scheme:dark){:root{--bg:#0b1120;--card:#1e293b;--soft:#172033;--ink:#e2e8f0;--mute:#94a3b8;--line:#334155;
---accent:#a5b4fc;--accent-soft:#2b2f66;--red:#f87171;--red-soft:#4c1d24;--amber:#fbbf24;--amber-soft:#4a3410;
---green:#4ade80;--green-soft:#123524;--shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.35)}}
-:root{color-scheme:light dark}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:1240px;margin:0 auto;padding:20px 16px 40px;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
-main>*{min-width:0}
-h2,h3{margin:0}
-h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);margin-bottom:10px}
-.card{background:var(--card);border-radius:14px;box-shadow:var(--shadow);padding:16px;min-width:0}
-.muted{color:var(--mute);margin:8px 0 0;font-size:12px}
-.top{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;justify-content:space-between}
-.brand{font-weight:800;font-size:20px;letter-spacing:.02em;display:flex;align-items:center;gap:10px}
-.brand small{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
-.logo{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#7c3aed)}
-.conn{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:3px 10px;border-radius:999px;background:var(--green-soft);color:var(--green)}
-.conn.off{background:var(--red-soft);color:var(--red)}
-.banner{padding:10px 14px;border-radius:12px;background:var(--red-soft);color:var(--red);font-weight:600;overflow-wrap:anywhere}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
-.kpi{background:var(--card);border-radius:14px;box-shadow:var(--shadow);padding:14px 16px;display:grid;gap:2px;border-top:3px solid var(--line)}
-.kpi b{font-size:26px;line-height:1.1;font-variant-numeric:tabular-nums}
-.kpi span,.role,.ev time{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);font-weight:700}
-.kpi.running{border-color:var(--accent)}.kpi.blocked{border-color:var(--red)}.kpi.blocked b{color:var(--red)}
-.kpi.blocked.zero b{color:inherit}.kpi.done{border-color:var(--green)}.kpi.paused{border-color:var(--amber)}
-.scroll{overflow-x:auto}
-svg{display:block;width:100%;min-width:560px;max-width:700px;margin:0 auto;height:auto;overflow:visible;font-family:system-ui,sans-serif}
-.stage rect{fill:var(--soft);stroke:var(--line);stroke-width:1.5}
-.stage.on rect{fill:var(--accent-soft);stroke:var(--accent)}
-.stage-label{font-weight:700;font-size:11px;text-anchor:middle;fill:var(--mute)}
-.stage-count{font-weight:800;font-size:30px;text-anchor:middle;fill:var(--line)}
-.stage.on .stage-count{fill:var(--accent)}.stage.on .stage-label{fill:var(--ink)}
-.flow{stroke:var(--accent);stroke-width:2;stroke-dasharray:4 4;animation:flow 1s linear infinite}
-@keyframes flow{to{stroke-dashoffset:-8}}
-.pointer{transition:transform .8s ease-in-out}
-.pointer circle{fill:var(--accent)}.pointer.blocked circle{fill:var(--red)}.pointer.paused circle{fill:var(--amber)}.pointer.done circle{fill:var(--green)}
-.pointer text{font:600 11px ui-monospace,monospace;fill:var(--ink)}
-.cols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
-.cols>*{min-width:0}
-.runs{display:grid;gap:16px}
-.run header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;align-items:flex-start;margin-bottom:12px}
-.run h3{font-size:16px}
-.gid{font:600 11px ui-monospace,monospace;color:var(--mute);overflow-wrap:anywhere}
-.figs{display:flex;flex-wrap:wrap;gap:6px}
-.fig{padding:3px 10px;border-radius:999px;background:var(--soft);border:1px solid var(--line);font-size:12px;font-variant-numeric:tabular-nums}
-.groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:10px}
-.g{display:grid;gap:8px;align-content:start;padding:12px;border-radius:12px;background:var(--soft);border:1px solid var(--line);border-top:3px solid var(--accent)}
-.g.blocked{border-top-color:var(--red)}.g.paused{border-top-color:var(--amber)}.g.done{border-top-color:var(--green)}.g.waiting{border-top-color:var(--line)}
-.g header{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:0}
-.chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;background:var(--accent-soft);color:var(--accent)}
-.chip.blocked{background:var(--red-soft);color:var(--red)}.chip.paused{background:var(--amber-soft);color:var(--amber)}.chip.done{background:var(--green-soft);color:var(--green)}.chip.waiting{background:var(--line);color:var(--mute)}
-.reason{margin:0;padding:8px 10px;border-radius:10px;font-size:12.5px;overflow-wrap:anywhere;background:var(--red-soft);color:var(--red)}
-.feed{display:grid;gap:2px}
-.ev{display:grid;grid-template-columns:62px auto 1fr auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
-.ev:last-child{border:0}.ev .sub{overflow-wrap:anywhere}
-.tag{padding:1px 7px;border-radius:6px;font:700 10.5px ui-monospace,monospace;background:var(--line);color:var(--mute)}
-.tag.status{background:var(--accent-soft);color:var(--accent)}.tag.done{background:var(--green-soft);color:var(--green)}
-.tag.blocked{background:var(--red-soft);color:var(--red)}.tag.paused{background:var(--amber-soft);color:var(--amber)}
-.queued{display:grid;gap:6px}
-.q{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
-.q:last-child{border:0}
-aside{display:grid;gap:16px}
-@media (max-width:900px){.cols{grid-template-columns:minmax(0,1fr)}}
-@media (max-width:480px){main{padding:14px 16px 32px}.kpi b{font-size:22px}.ev{grid-template-columns:56px auto 1fr}.ev .gid{display:none}}
-</style>
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
-<main>
+<main id="app">
 <header class="top"><div class="brand"><span class="logo"></span>Komodo<small>runs</small></div><span id="conn" class="conn off">connecting</span></header>
 <div id="error"></div>
 <div id="kpis" class="kpis"></div>
@@ -83,10 +15,15 @@ aside{display:grid;gap:16px}
 <div class="scroll"><svg id="pipeline" viewBox="0 0 650 200" role="img" aria-label="Stage pipeline with a live count per stage"></svg></div></section>
 <div class="cols">
 <section><h2>Runs</h2><div id="runs" class="runs"></div>
-<section class="card" style="margin-top:16px"><h2>Queued runs</h2><div id="queued" class="queued"></div></section></section>
+<section class="card queued-card"><h2>Queued runs</h2><div id="queued" class="queued"></div></section></section>
 <aside><section class="card"><h2>Events</h2><div id="events" class="feed"></div></section></aside>
 </div>
 </main>
+<div id="backdrop" class="backdrop" hidden></div>
+<aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" hidden>
+<header class="drawer-head"><div><h2>Run</h2><h3 id="drawer-title"></h3></div><span id="drawer-close"></span></header>
+<div id="drawer-body" class="drawer-body"></div>
+</aside>
 <script src="/ui.js"></script>
 </body>
 </html>

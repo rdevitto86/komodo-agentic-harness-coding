@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ type uiRunEvents struct {
 	sig    string    // the run's groups as JSON when the events were read
 	at     time.Time // when they were read
 	events []uiEvent
+	first  time.Time // the time of the run's earliest recorded event
 }
 
 // uiState is everything the page draws, in one JSON document.
@@ -31,9 +33,13 @@ type uiState struct {
 
 // uiRun is one live run with its groups and its time, tokens and cost.
 type uiRun struct {
-	RunID  string    `json:"run_id"`
-	Target string    `json:"target"`
-	Groups []uiGroup `json:"groups"`
+	RunID  string `json:"run_id"`
+	Target string `json:"target"`
+	// the plan id when the run was started from a plan; empty otherwise
+	Plan    string    `json:"plan,omitempty"`
+	Started time.Time `json:"started"` // the time of the run's earliest recorded event; zero when none was read
+	Groups  []uiGroup `json:"groups"`
+	Events  []uiEvent `json:"events"` // the run's newest events, newest first
 	// the figures of status (id); absent when the engine sent none
 	Figures *Figures `json:"figures,omitempty"`
 }
@@ -68,6 +74,9 @@ type uiEvent struct {
 	Group   string    `json:"group"` // empty for a run-level event
 }
 
+// uiPlanID matches a plan id: plan- and 6 lowercase hexadecimal characters.
+var uiPlanID = regexp.MustCompile(`^plan-[0-9a-f]{6}$`)
+
 // errUINoEngine is what the dashboard's engine client returns instead of starting an engine.
 var errUINoEngine = errors.New("the engine is not running")
 
@@ -76,6 +85,8 @@ var errUINoEngine = errors.New("the engine is not running")
 func (s *uiServer) collect(ctx context.Context) uiState {
 	// uiFeedTotal caps the merged feed.
 	const uiFeedTotal = 40
+	// uiRunFeed caps the events shown in one run's drawer.
+	const uiRunFeed = 20
 
 	st := uiState{
 		Runs:    []uiRun{},
@@ -98,7 +109,13 @@ func (s *uiServer) collect(ctx context.Context) uiState {
 	live := map[string]bool{}
 
 	for _, r := range d.Runs {
-		run := uiRun{RunID: r.RunID, Target: r.Target, Groups: make([]uiGroup, 0, len(r.Groups))}
+		run := uiRun{
+			RunID:  r.RunID,
+			Target: r.Target,
+			Plan:   uiPlan(r.Target),
+			Groups: make([]uiGroup, 0, len(r.Groups)),
+			Events: []uiEvent{},
+		}
 		for _, g := range r.Groups {
 			ug := uiGroup{Group: g.Group, Stage: g.Stage, State: g.State}
 			run.Groups = append(run.Groups, withBlock(ug, d.Blocked, r.RunID))
@@ -108,7 +125,10 @@ func (s *uiServer) collect(ctx context.Context) uiState {
 			run.Figures = fd.Figures
 		}
 
-		feed = append(feed, s.runEvents(ctx, r)...)
+		events, first := s.runEvents(ctx, r)
+		feed = append(feed, events...)
+		run.Started = first
+		run.Events = newestFirst(events, uiRunFeed)
 		st.Runs = append(st.Runs, run)
 		live[r.RunID] = true
 	}
@@ -125,8 +145,7 @@ func (s *uiServer) collect(ctx context.Context) uiState {
 
 	st.Totals = totalsOf(st)
 
-	slices.SortStableFunc(feed, func(a, b uiEvent) int { return b.Time.Compare(a.Time) })
-	st.Events = append(st.Events, feed[:min(len(feed), uiFeedTotal)]...)
+	st.Events = newestFirst(feed, uiFeedTotal)
 
 	return st
 }
@@ -165,26 +184,26 @@ func (s *uiServer) readStatus(ctx context.Context, target string) (StatusData, e
 
 // runEvents returns a run's newest events, reading the engine's replay only when the run's groups
 // changed or the cached events are old.
-func (s *uiServer) runEvents(ctx context.Context, r RunRow) []uiEvent {
+func (s *uiServer) runEvents(ctx context.Context, r RunRow) ([]uiEvent, time.Time) {
 	sig := string(mustJSONBytes(r.Groups))
 
 	c, ok := s.evCache[r.RunID]
 	if ok && c.sig == sig && time.Since(c.at) < uiReplayEvery {
-		return c.events
+		return c.events, c.first
 	}
 
-	events, err := s.readEvents(ctx, r.RunID)
+	events, first, err := s.readEvents(ctx, r.RunID)
 	if err != nil {
-		return c.events
+		return c.events, c.first
 	}
 
-	s.evCache[r.RunID] = uiRunEvents{sig: sig, at: time.Now(), events: events}
+	s.evCache[r.RunID] = uiRunEvents{sig: sig, at: time.Now(), events: events, first: first}
 
-	return events
+	return events, first
 }
 
-// readEvents returns the newest recorded events of a run.
-func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, error) {
+// readEvents returns the newest recorded events of a run and the time of its earliest one.
+func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, time.Time, error) {
 	// uiFeedPerRun is how many of a run's newest events the feed keeps.
 	const uiFeedPerRun = 50
 
@@ -197,10 +216,13 @@ func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, err
 
 	frames, err := uiAsk(ctx, s.deps.Engine, req)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
-	var out []uiEvent
+	var (
+		out   []uiEvent
+		first time.Time
+	)
 
 	for _, f := range frames {
 		if f.Status != engine.StatusEvent || f.Event == nil {
@@ -208,6 +230,10 @@ func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, err
 		}
 
 		e := f.Event
+		if first.IsZero() || e.Time.Before(first) {
+			first = e.Time
+		}
+
 		out = append(out, uiEvent{
 			Time:    e.Time,
 			Type:    string(e.Type),
@@ -221,7 +247,24 @@ func (s *uiServer) readEvents(ctx context.Context, runID string) ([]uiEvent, err
 		out = out[len(out)-uiFeedPerRun:]
 	}
 
-	return out, nil
+	return out, first, nil
+}
+
+// uiPlan returns the target when it is a plan id, and an empty string otherwise.
+func uiPlan(target string) string {
+	if uiPlanID.MatchString(target) {
+		return target
+	}
+
+	return ""
+}
+
+// newestFirst returns the n newest events of es, newest first, without changing es.
+func newestFirst(es []uiEvent, n int) []uiEvent {
+	out := append([]uiEvent{}, es...)
+	slices.SortStableFunc(out, func(a, b uiEvent) int { return b.Time.Compare(a.Time) })
+
+	return out[:min(len(out), n)]
 }
 
 // mustJSONBytes encodes v; the dashboard's own types always encode.

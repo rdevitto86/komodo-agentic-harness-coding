@@ -186,6 +186,8 @@ func (s *uiServer) page(w http.ResponseWriter, r *http.Request) {
 	case "/":
 	case "/ui.js":
 		name, kind = "ui.js", "text/javascript; charset=utf-8"
+	case "/ui.css":
+		name, kind = "ui.css", "text/css; charset=utf-8"
 	default:
 		http.NotFound(w, r)
 		return

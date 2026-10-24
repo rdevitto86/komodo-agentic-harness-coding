@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,15 @@ type smokeResult struct {
 	ErrorKidsWithError int      `json:"errorKidsWithError"`
 	RunTexts           []string `json:"runTexts"`
 	All                []string `json:"all"`
+	DrawerText         []string `json:"drawerText"`
+	Opened             bool     `json:"opened"`
+	FocusInDrawer      bool     `json:"focusInDrawer"`
+	LiveUpdate         bool     `json:"liveUpdate"`
+	Closed             bool     `json:"closed"`
+	FocusBack          bool     `json:"focusBack"`
+	EnterOpens         bool     `json:"enterOpens"`
+	BackdropCloses     bool     `json:"backdropCloses"`
+	ClickOpens         bool     `json:"clickOpens"`
 }
 
 func TestUIScriptDrawsNoStrayTextOrDuplicateStage(t *testing.T) {
@@ -46,6 +56,17 @@ func TestUIScriptDrawsNoStrayTextOrDuplicateStage(t *testing.T) {
 	for _, code := range []string{"test_review", "build", "intake"} {
 		if slices.Contains(r.RunTexts, code) {
 			t.Errorf("a group card shows the raw stage code %q beside its chip", code)
+		}
+	}
+	if !r.Opened || !r.FocusInDrawer || !r.LiveUpdate || !r.Closed || !r.FocusBack {
+		t.Errorf("the drawer keyboard flow failed: %+v", r)
+	}
+	if !r.EnterOpens || !r.BackdropCloses || !r.ClickOpens {
+		t.Errorf("the drawer did not open on Enter and click or close on the backdrop: %+v", r)
+	}
+	for _, want := range []string{"plan-7f3a9c", "r1", "risky_change: ", "Approve the lease change?"} {
+		if !slices.ContainsFunc(r.DrawerText, func(s string) bool { return strings.Contains(s, want) }) {
+			t.Errorf("the drawer lacks %q: %q", want, r.DrawerText)
 		}
 	}
 }

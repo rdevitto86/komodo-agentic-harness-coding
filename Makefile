@@ -2,7 +2,7 @@ VENV := $(HOME)/.venvs/komodo-docs
 KOMODO_BIN ?= $(HOME)/.komodo/bin/komodo
 GATE_OSES := linux darwin windows
 
-.PHONY: docsite dashboard gate
+.PHONY: docsite gate
 
 # Serve the HLD and LLD at http://127.0.0.1:8765/hld/, installing the docs tools on first run.
 docsite: $(VENV)/bin/mkdocs
@@ -13,10 +13,6 @@ $(VENV)/bin/mkdocs: docsite/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -q -r docsite/requirements.txt
 	touch $@
-
-# Serve the dashboard proof of concept on moving mock data; it prints its address with an access token.
-dashboard:
-	go run ./dashboard/poc
 
 # Build, vet and test, build for each of the 3 operating systems, then place the development build at KOMODO_BIN.
 gate:

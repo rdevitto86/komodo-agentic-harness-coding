@@ -33,6 +33,7 @@ type uiFake struct {
 	events map[string][]bus.Event // replay answers by run id
 	down   error                  // returned by Send when set
 	hang   bool                   // Send blocks until the request's context ends
+	empty  bool                   // status answers with no runs, queued entries or blocked groups
 	stageB string                 // the stage of run B's group; commit when empty
 	replay map[string]int         // replay requests by run id
 }
@@ -64,9 +65,13 @@ func (f *uiFake) Send(ctx context.Context, r engine.Request) (<-chan engine.Repl
 		}
 		ch <- engine.Reply{ID: r.ID, Status: engine.StatusOK, Final: true}
 	case engine.VerbStatus:
+		if f.empty {
+			ch <- okReply(map[string]any{"runs": []RunRow{}, "queued": []QueuedRow{}, "blocked": []BlockedRow{}})
+			return ch, nil
+		}
 		d := map[string]any{
 			"runs": []RunRow{
-				{RunID: uiRunA, Target: "ep-1", Groups: []GroupRow{
+				{RunID: uiRunA, Target: "plan-7f3a9c", Groups: []GroupRow{
 					{Group: "tg-1.1", Stage: "build", State: "running"},
 					{Group: "tg-1.2", Stage: "test_review", State: "blocked"},
 					{Group: "tg-1.3", Stage: "done", State: "done"},
@@ -75,7 +80,7 @@ func (f *uiFake) Send(ctx context.Context, r engine.Request) (<-chan engine.Repl
 			},
 			"queued": []QueuedRow{{Target: "ep-3", RunID: "q1", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}},
 			"blocked": []BlockedRow{
-				{Group: "tg-1.2", RunID: uiRunA, Reason: "needs_scope", Question: "Approve a change outside the files?"},
+				{Group: "tg-1.2", RunID: uiRunA, Reason: "risky_change", Question: "Approve the change to the lease table?"},
 			},
 		}
 		switch r.Target {
@@ -191,7 +196,7 @@ func TestUIStateMatchesStatusWithFigures(t *testing.T) {
 	if a.Figures == nil || a.Figures.WallS != 3725 || a.Figures.TokensIn != 1000 || a.Figures.USD != 0.5 {
 		t.Fatalf("run figures = %+v", a.Figures)
 	}
-	if g := a.Groups[1]; g.Question == "" || g.Reason != "needs_scope" {
+	if g := a.Groups[1]; g.Question == "" || g.Reason != "risky_change" {
 		t.Fatalf("a blocked group carries its question: %+v", g)
 	}
 	want := uiTotals{Running: 1, Paused: 1, Blocked: 1, Done: 1, Queued: 1, Tokens: 1249, USD: 0.75}
@@ -271,7 +276,7 @@ func TestUIEventsStreamPushesChanges(t *testing.T) {
 
 func TestUIRoutesAcceptNoStateChangingMethod(t *testing.T) {
 	ts, _ := uiFixture(t, newUIFake(), realAssets(t))
-	for _, path := range []string{"/", "/ui.js", "/state", "/events", "/stop", "/abandon", "/run"} {
+	for _, path := range []string{"/", "/ui.js", "/ui.css", "/state", "/events", "/stop", "/abandon", "/run"} {
 		for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 			req, _ := http.NewRequest(m, ts.URL+path, strings.NewReader("x"))
 			resp, err := http.DefaultClient.Do(req)

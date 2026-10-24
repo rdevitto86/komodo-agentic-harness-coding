@@ -5,6 +5,11 @@ const STAGES = ["intake", "build", "test_review", "commit", "cleanup", "done"];
 const TITLES = {intake: "Intake", build: "Build", test_review: "Test · review", commit: "Commit", cleanup: "Cleanup", done: "Done"};
 const SVG = "http://www.w3.org/2000/svg";
 const dots = new Map(); // pipeline dot elements by run and group, kept so a moved dot slides
+const rows = new Map(); // run row elements by run id, so focus can return to one
+const ZERO = "0001-01-01T00:00:00Z"; // how an unset time arrives
+let current = {runs: []}; // the latest state received
+let openId = null; // the run id shown in the drawer, or null when it is closed
+let closer = null; // the drawer's close button
 
 // el builds an element with attributes and children; text children become text nodes, never markup.
 function el(tag, attrs, ...kids) {
@@ -109,17 +114,117 @@ function groupCard(g) {
     g.question ? html("p", "reason", html("b", "", g.reason + ": "), g.question) : null);
 }
 
-// runCard draws one run: its target, id, time, tokens and cost, and its group cards.
-function runCard(r) {
-  const f = r.figures;
+// figures draws the time, tokens and cost chips of a run.
+function figures(f) {
   const figs = html("div", "figs");
   if (f) {
     figs.append(html("span", "fig", "Time " + span(f.wall_s)), html("span", "fig", num(f.tokens_in + f.tokens_out) + " tokens"), html("span", "fig", usd(f.usd)));
     if (f.usd_equiv > 0) figs.append(html("span", "fig", "≈ " + usd(f.usd_equiv) + " subscription"));
   }
-  return html("article", "card run",
-    html("header", "", html("div", "", html("h3", "", r.target), html("span", "gid", r.run_id)), figs),
+  return figs;
+}
+
+// runCard draws one run as a row that opens its drawer on click, Enter or Space.
+function runCard(r) {
+  const card = el("article", {class: "card run", tabindex: "0", role: "button", "aria-haspopup": "dialog", "data-run": r.run_id,
+      "aria-label": "Open run " + (r.plan || r.target)},
+    html("header", "", html("div", "", html("h3", "", r.target), html("span", "gid", (r.plan ? "" : "run ") + r.run_id)), figures(r.figures)),
     html("div", "groups", r.groups.map(groupCard)));
+  card.addEventListener("click", () => openRun(r.run_id));
+  card.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openRun(r.run_id); }
+  });
+  rows.set(r.run_id, card);
+  return card;
+}
+
+// facts draws label and value pairs.
+function facts(pairs) {
+  return html("dl", "facts", pairs.map(([k, v]) => html("div", "", html("dt", "", k), html("dd", "", v))));
+}
+
+// outcome words what a group has come to: the block reason, finished, or still open.
+function outcome(g) {
+  if (g.state === "blocked") return g.reason || "Waiting for an answer";
+  return g.state === "done" ? "Finished" : "Open";
+}
+
+// groupTable draws every group of a run with its stage, status and outcome.
+function groupTable(groups) {
+  const head = html("tr", "", ["Group", "Stage", "Status", "Outcome"].map((h) => html("th", "", h)));
+  const body = groups.map((g) => html("tr", "", html("td", "mono", g.group), html("td", "", TITLES[g.stage] || "—"),
+    html("td", "", html("span", "chip " + tone(g.state), g.state)), html("td", "", outcome(g))));
+  return html("table", "gt", html("thead", "", head), html("tbody", "", body));
+}
+
+// runEvents draws the recent events of one run, newest first.
+function runEvents(rows) {
+  if (!rows.length) return html("p", "muted", "No events yet.");
+  return html("div", "feed", rows.map((e) => html("div", "ev", html("time", "", clock(e.time)), html("span", "tag " + evTone(e.type), e.type), html("span", "sub", e.subtype), html("span", "gid", e.group))));
+}
+
+// detail draws the whole drawer body of one run.
+function detail(r) {
+  const f = r.figures;
+  const pairs = [["Plan", r.plan || "—"], ["Run id", r.run_id], ["Started with", r.target],
+    ["Started", r.started && r.started !== ZERO ? new Date(r.started).toLocaleString("en-GB") : "—"]];
+  if (f) pairs.push(["Time", span(f.wall_s)], ["Tokens", num(f.tokens_in) + " in · " + num(f.tokens_out) + " out"], ["Cost", usd(f.usd) + (f.usd_equiv > 0 ? " · ≈ " + usd(f.usd_equiv) + " subscription" : "")]);
+  const asks = r.groups.filter((g) => g.question).map((g) => html("p", "reason", html("b", "", g.group + " · " + g.reason + ": "), g.question));
+  return [facts(pairs), asks.length ? html("h2", "", "Waiting for an answer") : null, ...asks,
+    html("h2", "", "Groups"), groupTable(r.groups), html("h2", "", "Recent events"), runEvents(r.events || [])];
+}
+
+// drawer fills the open drawer from the state, keeping the scroll position so a live update does not jump.
+function drawer(s) {
+  if (!openId) return;
+  const body = document.getElementById("drawer-body");
+  const top = body.scrollTop;
+  const r = s.runs.find((x) => x.run_id === openId);
+  document.getElementById("drawer-title").replaceChildren(r ? (r.plan || r.target) : "Run ended");
+  body.replaceChildren(...(r ? detail(r) : [html("p", "muted", "This run is no longer live.")]).filter((k) => k != null));
+  body.scrollTop = top;
+}
+
+// show hides or reveals an element by its id.
+function show(id, on) {
+  const e = document.getElementById(id);
+  if (on) e.removeAttribute("hidden"); else e.setAttribute("hidden", "");
+}
+
+// openRun opens the drawer on a run, makes the page behind it inert and moves focus into the drawer.
+function openRun(id) {
+  openId = id;
+  document.getElementById("app").setAttribute("inert", "");
+  show("backdrop", true);
+  show("drawer", true);
+  drawer(current);
+  closer.focus();
+}
+
+// closeRun closes the drawer and returns focus to the row that opened it.
+function closeRun() {
+  const id = openId;
+  openId = null;
+  show("drawer", false);
+  show("backdrop", false);
+  document.getElementById("app").removeAttribute("inert");
+  const row = rows.get(id);
+  if (row) row.focus();
+}
+
+// focusedRun returns the id of the run row that has focus, if any.
+function focusedRun() {
+  const a = document.activeElement;
+  return a && a.getAttribute ? a.getAttribute("data-run") : null;
+}
+
+// wire builds the close button and binds Escape and the backdrop to it.
+function wire() {
+  closer = el("button", {type: "button", class: "close", "aria-label": "Close run"}, "Close");
+  closer.addEventListener("click", closeRun);
+  document.getElementById("drawer-close").replaceChildren(closer);
+  document.getElementById("backdrop").addEventListener("click", closeRun);
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && openId) closeRun(); });
 }
 
 // queued draws the waiting runs.
@@ -144,9 +249,14 @@ function render(s) {
   fill("error", s.error ? html("div", "banner", "The engine could not be read: " + s.error) : null);
   kpis(s.totals);
   pipeline(s.runs);
+  const had = openId ? null : focusedRun();
+  current = s;
+  rows.clear();
   fill("runs", s.runs.length ? s.runs.map(runCard) : html("p", "muted", "No live runs."));
+  if (had && rows.has(had)) rows.get(had).focus();
   queued(s.queued);
   events(s.events);
+  drawer(s);
 }
 
 // connect opens the event stream; the browser reconnects it by itself after a drop.
@@ -158,4 +268,5 @@ function connect() {
   es.onerror = () => { conn.textContent = "reconnecting"; conn.className = "conn off"; };
 }
 
+wire();
 connect();
