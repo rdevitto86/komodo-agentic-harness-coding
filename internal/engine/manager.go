@@ -377,6 +377,16 @@ func (m *Manager) launchRun(ctx context.Context, e bus.Event, rs *bus.RunStart, 
 		return fail("read the limits: %v", err)
 	}
 
+	if resume {
+		found, err := m.d.Plans.Approve(ctx, rs.Root, rs.Target)
+		if err != nil {
+			return fail("approve the plan %s: %v", rs.Target, err)
+		}
+		if len(found) > 0 {
+			return fail("plan.md of %s fails the lint checks: %s", rs.Target, strings.Join(found, "; "))
+		}
+	}
+
 	specs, err := m.d.Plans.Specs(ctx, rs.Root, rs.Target, rs.Groups)
 	if err != nil {
 		return fail("read the plan %s: %v", rs.Target, err)

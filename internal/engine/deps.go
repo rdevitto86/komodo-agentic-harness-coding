@@ -74,6 +74,9 @@ type PlanSource interface {
 	Specs(ctx context.Context, root, plan string, labels []string) ([]GroupSpec, error)
 	// Facts returns what the plan's pull request describes: the goal, the release and every group of the plan.
 	Facts(ctx context.Context, root, plan string) (PlanFacts, error)
+	// Approve lints the plan's plan.md again and rewrites its blueprint from it; a broken edit returns one line per
+	// failing finding and leaves the blueprint as it was.
+	Approve(ctx context.Context, root, plan string) (findings []string, err error)
 }
 
 // PlanFacts is what a plan's pull request says about the plan, whatever groups the current run holds.

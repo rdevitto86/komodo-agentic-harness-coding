@@ -71,6 +71,22 @@ func (e writeError) Error() string { return e.err.Error() }
 // Unwrap returns the wrapped failure.
 func (e writeError) Unwrap() error { return e.err }
 
+// Approve runs the lint checks on the stored plan.md of a plan against the base commit and rewrites its blueprint. The
+// failing findings come back with the blueprint left as it was.
+func (h *Handler) Approve(ctx context.Context, plan string) ([]Finding, error) {
+	tree, err := h.d.Tree(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the base commit: %w", err)
+	}
+
+	_, found, err := Approve(h.d.Home, h.d.Repo, plan, h.protected(), tree.Paths())
+	if err != nil {
+		return nil, err
+	}
+
+	return failing(found), nil
+}
+
 // LintPlan lints a draft for the planner's lint_plan tool, against the tracked files of the plan in progress.
 func (h *Handler) LintPlan(d PlanDraft) []Finding {
 	var (

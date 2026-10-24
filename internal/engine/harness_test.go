@@ -275,6 +275,9 @@ type fakePlans struct {
 	factsErr error
 }
 
+// Approve approves every plan.
+func (p *fakePlans) Approve(context.Context, string, string) ([]string, error) { return nil, nil }
+
 // Facts returns the planted plan facts.
 func (p *fakePlans) Facts(context.Context, string, string) (PlanFacts, error) {
 	p.mu.Lock()

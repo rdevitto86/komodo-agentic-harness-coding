@@ -183,6 +183,27 @@ func (p *plannerSession) Close() error {
 	return nil
 }
 
+// approvePlan lints the plan.md of a plan of the repository at root and rewrites its blueprint; it returns the failing
+// findings, one line each.
+func (s *stack) approvePlan(ctx context.Context, root, plan string) ([]string, error) {
+	k, err := s.kitFor(root, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	found, err := k.intake.Approve(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []string
+	for _, f := range found {
+		out = append(out, fmt.Sprintf("%s: %s", f.Path, f.Message))
+	}
+
+	return out, nil
+}
+
 // intakeDeps wires the Intake Handler to the repository the engine serves.
 func (k *repoKit) intakeDeps(cm *contextmgr.Manager) intake.Deps {
 	s := k.s

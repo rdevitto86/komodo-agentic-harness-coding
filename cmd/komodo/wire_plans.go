@@ -18,11 +18,28 @@ import (
 type planSource struct {
 	home   string
 	repoID func(root string) (string, error) // the repository id of a root
+	// lints and approves a plan's plan.md; nil approves nothing
+	approve func(ctx context.Context, root, plan string) ([]string, error)
 }
 
 // newPlanSource returns a plan source over the plan folders of home.
 func newPlanSource(home string, repoID func(root string) (string, error)) *planSource {
 	return &planSource{home: home, repoID: repoID}
+}
+
+// withApprove sets the function that lints and approves a plan's plan.md and returns the plan source.
+func (p *planSource) withApprove(f func(ctx context.Context, root, plan string) ([]string, error)) *planSource {
+	p.approve = f
+	return p
+}
+
+// Approve lints the plan's plan.md again and rewrites its blueprint; it returns the failing findings, one line each.
+func (p *planSource) Approve(ctx context.Context, root, plan string) ([]string, error) {
+	if p.approve == nil {
+		return nil, nil
+	}
+
+	return p.approve(ctx, root, plan)
 }
 
 // Specs returns the group specs of the plan for the labels, or every group of the plan when none, in plan order.

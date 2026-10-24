@@ -4,6 +4,7 @@ package integration
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,4 +155,49 @@ func TestRewriteNotStartedGroupRunsAfterPlanning(t *testing.T) {
 	}
 
 	r.waitDone(120 * time.Second)
+}
+
+// Plan approval: a hand edit of plan.md that breaks a lint rule refuses `komodo run <plan id>` with the findings and leaves
+// blueprint.json unchanged; no run starts.
+func TestRunRefusesHandEditThatBreaksARule(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, path := r.planGoal("add an Add function to the tiny package")
+	blueprint := filepath.Join(filepath.Dir(path), "blueprint.json")
+
+	before, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broken := strings.Replace(string(text), "points: 3", "points: 4", 1)
+	if broken == string(text) {
+		t.Fatalf("plan.md has no points: 3 line to break:\n%s", text)
+	}
+
+	if err := os.WriteFile(path, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := r.komodo(60*time.Second, "run", id)
+	if res.code == 0 || !strings.Contains(res.stdout, "points 4 is not on the scale") {
+		t.Fatalf("run of a broken plan.md exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	}
+
+	after, err := os.ReadFile(blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(after) != string(before) {
+		t.Fatalf("blueprint.json changed on a refused run:\n%s", after)
+	}
+
+	if evs := r.events(); has(evs, "run-status", "group.start", "") {
+		t.Fatalf("a refused run started a group\n%s", r.evidence(evs))
+	}
 }
