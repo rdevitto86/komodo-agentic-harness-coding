@@ -110,7 +110,12 @@ func (e *epicPush) run(ctx context.Context) (EpicResult, error) {
 		return res, nil
 	}
 
-	if res.Pushed, err = e.push(ctx, head); err != nil {
+	if res.Last && e.allDone() && !h.Epics.Paused(r.Repo+"/"+r.Epic) {
+		if res.Head, err = e.fragment(ctx, res.Head); err != nil {
+			return EpicResult{}, err
+		}
+	}
+	if res.Pushed, err = e.push(ctx, res.Head); err != nil {
 		return EpicResult{}, err
 	}
 	if res.Last && e.allDone() && !h.Epics.Paused(r.Repo+"/"+r.Epic) {
@@ -207,6 +212,40 @@ func (e *epicPush) push(ctx context.Context, local string) (bool, error) {
 	return true, nil
 }
 
+// fragmentPath returns the plan's changelog fragment path, relative to the repository root.
+func (e *epicPush) fragmentPath() string { return "changelog.d/" + e.r.Epic + ".md" }
+
+// fragment writes the plan's changelog fragment into the epic worktree and commits it, so the branch push carries it. A
+// fragment already on the branch is overwritten; an unchanged one adds no commit. It returns the branch tip.
+func (e *epicPush) fragment(ctx context.Context, head string) (string, error) {
+	path := filepath.Join(e.wt, filepath.FromSlash(e.fragmentPath()))
+
+	var b strings.Builder
+
+	b.WriteString("## " + e.r.Release + "\n\n" + e.r.Goal + "\n\n")
+
+	for _, g := range e.r.GroupGoals {
+		b.WriteString("- " + g + "\n")
+	}
+
+	if old, err := os.ReadFile(path); err == nil && string(old) == b.String() {
+		return head, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fail(KindGit, true, fmt.Errorf("create the changelog folder: %w", err))
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", fail(KindGit, true, fmt.Errorf("write the changelog fragment: %w", err))
+	}
+
+	tip, err := e.h.Git.Commit(ctx, e.wt, e.r.Epic+": changelog fragment")
+	if err != nil {
+		return "", gitFail(err)
+	}
+
+	return tip, nil
+}
+
 // pullRequest opens the epic's pull request, or refreshes its body when one is open and the push changed the branch.
 func (e *epicPush) pullRequest(ctx context.Context, ls []Landing, res *EpicResult) error {
 	stat, err := e.h.Git.DiffStat(ctx, e.wt, "refs/remotes/"+e.remote+"/"+e.base, "HEAD")
@@ -214,7 +253,13 @@ func (e *epicPush) pullRequest(ctx context.Context, ls []Landing, res *EpicResul
 		return gitFail(err)
 	}
 
-	f := EpicFacts{DiffStat: stat}
+	f := EpicFacts{
+		Goal:       e.r.Goal,
+		GroupGoals: e.r.GroupGoals,
+		Release:    e.r.Release,
+		Changelog:  e.fragmentPath(),
+		DiffStat:   stat,
+	}
 
 	// A group landed again after a fix keeps only its newest section.
 	var seen []string

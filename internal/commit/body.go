@@ -27,10 +27,17 @@ const (
 
 	// epicBodyTemplate is the epic pull request body; every value comes from EpicFacts.
 	epicBodyTemplate = `## Summary
+{{.Goal}}
+
+{{range .GroupGoals}}- {{.}}
+{{end}}
+## Changes
 {{.DiffStat}}
 
 {{range .Groups}}{{.}}
-{{end}}`
+{{end}}
+## Changelog
+{{.Changelog}}`
 )
 
 var (

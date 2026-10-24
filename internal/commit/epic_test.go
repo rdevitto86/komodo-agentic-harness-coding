@@ -51,8 +51,8 @@ func TestPushEpicAfterThreeGroupsPushesOnceAndOpensOnePullRequest(t *testing.T) 
 	if w.remoteTip("komodo/ep-1") != w.localTip() {
 		t.Fatal("the remote does not hold the local epic tip")
 	}
-	if got := git(t, w.remote, "rev-list", "--count", "main..komodo/ep-1"); got != "3" {
-		t.Fatalf("the remote epic holds %s commits beyond main, want 3", got)
+	if got := git(t, w.remote, "rev-list", "--count", "main..komodo/ep-1"); got != "4" {
+		t.Fatalf("the remote epic holds %s commits beyond main, want 3 landings and 1 fragment", got)
 	}
 	if out := git(t, w.remote, "branch", "--list", "komodo/ep-1-*"); out != "" {
 		t.Fatalf("group branches were pushed: %s", out)
@@ -149,8 +149,11 @@ func TestPushEpicAfterACrashLosesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Pushed || !res.Last || w.remoteTip("komodo/ep-1") != tip || w.gh.count("pr create") != 1 {
+	if !res.Pushed || !res.Last || w.remoteTip("komodo/ep-1") != res.Head || w.gh.count("pr create") != 1 {
 		t.Fatalf("result = %+v; remote %s, local %s", res, w.remoteTip("komodo/ep-1"), tip)
+	}
+	if w.localTip() != res.Head {
+		t.Fatalf("the fragment commit is not on the local branch: %s, want %s", w.localTip(), res.Head)
 	}
 	if n := countLines(git(t, w.clone, "worktree", "list")); n != worktrees {
 		t.Fatalf("the temporary worktree was left behind: %d worktrees, want %d", n, worktrees)
@@ -391,4 +394,78 @@ func countLines(s string) int {
 		}
 	}
 	return n
+}
+
+// The last landing commits exactly one fragment file onto the epic branch, pushes it, and the pull request body names its
+// path; a second push with the same plan changes the file's history by nothing.
+func TestPushEpicCommitsOneChangelogFragment(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	groups := []string{"tg-1.1", "tg-1.2"}
+	for _, label := range groups {
+		w.land(h, label, groups...)
+	}
+	req := w.epicReq(groups...)
+	req.Goal = "Ship the cart"
+	req.Release = "V1"
+	req.GroupGoals = []string{"tg-1.1: Add cart", "tg-1.2: Add checkout"}
+
+	res, err := h.PushEpic(w.ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Pushed || !res.PRNew {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := git(t, w.remote, "diff", "--name-only", "main", "komodo/ep-1", "--", "changelog.d"); got != "changelog.d/ep-1.md" {
+		t.Fatalf("fragment files on the remote branch = %q", got)
+	}
+	if got := git(t, w.remote, "rev-list", "--count", "main..komodo/ep-1"); got != "3" {
+		t.Fatalf("the remote epic holds %s commits beyond main, want 2 landings and 1 fragment", got)
+	}
+	frag := git(t, w.remote, "show", "komodo/ep-1:changelog.d/ep-1.md")
+	for _, want := range []string{"V1", "Ship the cart", "tg-1.2: Add checkout"} {
+		if !strings.Contains(frag, want) {
+			t.Fatalf("fragment lacks %q:\n%s", want, frag)
+		}
+	}
+	body := w.gh.file("create-body.txt")
+	for _, want := range []string{"changelog.d/ep-1.md", "Ship the cart", "- tg-1.1: Add cart"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body lacks %q:\n%s", want, body)
+		}
+	}
+
+	req.Goal = "Ship the cart, revised"
+	if _, err := h.PushEpic(w.ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := git(t, w.remote, "diff", "--name-only", "main", "komodo/ep-1", "--", "changelog.d"); got != "changelog.d/ep-1.md" {
+		t.Fatalf("fragment files after the second push = %q", got)
+	}
+	if got := git(t, w.remote, "show", "komodo/ep-1:changelog.d/ep-1.md"); !strings.Contains(got, "revised") {
+		t.Fatalf("fragment not updated:\n%s", got)
+	}
+	if got := git(t, w.remote, "rev-list", "--count", "main..komodo/ep-1"); got != "4" {
+		t.Fatalf("second push left %s commits beyond main, want 4", got)
+	}
+}
+
+// A second push that changes nothing adds no commit and no second fragment.
+func TestPushEpicSameFragmentAddsNoCommit(t *testing.T) {
+	w := newWorld(t)
+	h := w.handler()
+	w.land(h, "tg-1.1", "tg-1.1")
+	req := w.epicReq("tg-1.1")
+	req.Goal, req.Release = "Ship it", "V1"
+	if _, err := h.PushEpic(w.ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	tip := w.remoteTip("komodo/ep-1")
+	if _, err := h.PushEpic(w.ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if w.remoteTip("komodo/ep-1") != tip {
+		t.Fatal("an unchanged plan added a commit")
+	}
 }

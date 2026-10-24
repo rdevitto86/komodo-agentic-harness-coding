@@ -53,11 +53,18 @@ func TestRenderBody(t *testing.T) {
 
 // RenderEpicBody joins the landed groups' sections under the epic's diff stat.
 func TestRenderEpicBody(t *testing.T) {
-	got, err := RenderEpicBody(EpicFacts{DiffStat: "9 files changed", Groups: []string{"## one\n- a\n", "## two\n- b\n"}})
+	got, err := RenderEpicBody(EpicFacts{
+		Goal:       "Ship it",
+		GroupGoals: []string{"tg-1: one"},
+		Changelog:  "changelog.d/ep-1.md",
+		DiffStat:   "9 files changed",
+		Groups:     []string{"## one\n- a\n", "## two\n- b\n"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(got, "## Summary\n9 files changed\n\n") ||
+	if !strings.HasPrefix(got, "## Summary\nShip it\n\n- tg-1: one\n\n## Changes\n9 files changed\n\n") ||
+		!strings.HasSuffix(got, "## Changelog\nchangelog.d/ep-1.md") ||
 		strings.Index(got, "## one") > strings.Index(got, "## two") || !strings.Contains(got, "- b") {
 		t.Fatalf("got %q", got)
 	}

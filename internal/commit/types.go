@@ -57,6 +57,10 @@ type PRFacts struct {
 
 // EpicFacts are the facts the epic pull request body renders.
 type EpicFacts struct {
+	Goal       string   `json:"goal"`        // the plan's goal
+	GroupGoals []string `json:"group_goals"` // one line per group of the plan, as "<label>: <goal>"
+	Release    string   `json:"release"`     // the release the plan delivers
+	Changelog  string   `json:"changelog"`   // path of the plan's changelog fragment
 	// git's diff stat of the epic branch against the base branch
 	DiffStat string `json:"diff_stat"`
 	// one section per landed group, in landing order, as RenderBody wrote it
@@ -80,7 +84,10 @@ type EpicPush struct {
 	Epic       string   `json:"epic"`        // the epic label, such as ep-1
 	EpicGroups []string `json:"epic_groups"` // labels of every group of the epic
 	// labels of the groups the Runtime Manager holds Done; the pull request opens only when this names every group
-	Done []string `json:"done"`
+	Done       []string `json:"done"`
+	Goal       string   `json:"goal"`        // the plan's goal
+	GroupGoals []string `json:"group_goals"` // one line per group, as "<label>: <goal>"
+	Release    string   `json:"release"`     // the release the plan delivers, such as V1
 }
 
 // EpicResult is what PushEpic returns: what the epic branch holds locally and what reached the remote.
