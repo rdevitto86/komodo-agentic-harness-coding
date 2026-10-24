@@ -754,7 +754,7 @@ func (c *CLI) PrintError(f fault.Fault) error
 
 `--list` and `--all` act per command:
 
-- **`--list`:** for `run` the plan ids and group labels in Komodo's plan folders for the repository, for `stop` and `replay` the run ids and labels the engine knows, for `abandon` the group labels that can be abandoned, and for `config get` every settings key.
+- **`--list`:** for `run` and `plan` the plan ids in Komodo's plan folders for the repository, for `stop` and `replay` the run ids and labels the engine knows, for `abandon` the group labels that can be abandoned, and for `config get` every settings key.
 - **`--all`:** for `status` every repository on the machine, and for `config get` a JSON listing of every key with value, default, limit and source.
 
 #### The 13 commands
@@ -765,7 +765,7 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 |---|---|---|
 | `install` | Direct call | The installer in this package; no event |
 | `config get\|set (id)` | Direct call | `GetConfigItem()`, `SetConfigItem()` |
-| `plan` | Event `plan` | Intake Handler subscribes to `plan` |
+| `plan [id]` | Event `plan` | Intake Handler subscribes to `plan` |
 | `run (id)` | Event `run-start`; with `--approve`, `--deny` or `--override`, event `run-continue` | Runtime Manager subscribes to both |
 | `stop (id)` | Event `run-stop` | Runtime Manager subscribes to `run-stop` |
 | `replay (id)` | Control request `replay` | Runtime Manager, which reads the Event Bus's event store through `bus.Reader` ([chapter 4](#4-event-bus)) |
@@ -787,7 +787,8 @@ Each command is a *direct call* (the CLI makes the call and prints the result), 
 
 | Command | The id is |
 |---|---|
-| `run` | A plan id, then optionally a group label of that plan (`tg-2`) |
+| `run` | A plan id alone; a group label is a usage error |
+| `plan` | Optional: an existing plan id, to amend that plan |
 | `stop`, `replay`, `status` | A plan id, a plan id then a group label, or a run id. A group label alone is a usage error; after a plan id it means that group's latest attempt, and a run id means that one attempt. `status` takes none to list live runs |
 | `abandon` | A plan id and a group label |
 | `config get\|set` | A settings key |
@@ -823,7 +824,7 @@ The id is a dotted settings key such as `limits.group_retries` or `agents.review
 
 ##### `plan`
 
-Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input.
+Anyone runs `plan`, usually the orchestrator. It starts planning with the goal text or the document paths: the CLI sends a `plan` event to the engine, and the engine's Event Bus delivers it to the Intake Handler. `plan` costs model tokens. `--from <path>` feeds a document set as input. `plan <plan id>` with a goal amends that plan: only groups that have not started change, and a change to a running or done group is refused.
 
 `plan` writes `plan.md`, prints its path and the plan id, and stops; manual approval is the default. A person or the orchestrator may read and edit the file, then start it with `komodo run <plan id>`. A document set may include a `docs/backlog/` folder; the planner reads it like any other input document. [TODO: the auto-approval options on top of manual approval ([G-322](#g-322))]
 
@@ -845,13 +846,13 @@ Anyone runs `run (plan id)`, usually the orchestrator. It sends the engine a `ru
 
 ##### `stop`
 
-Anyone runs `stop (id)`. It sends the engine a `run-stop` event, and the Runtime Manager halts the run's groups. The id is a label, which stops the latest attempt, or a run id, which stops that one attempt. `stop` also removes a queued run of that target from the schedule queue.
+Anyone runs `stop (id)`. It sends the engine a `run-stop` event, and the Runtime Manager halts the run's groups. The id is a plan id, which stops the plan's latest attempt; a plan id then a group label, which stops that group's latest attempt; or a run id, which stops that one attempt. `stop` also removes a queued run of that target from the schedule queue.
 
 ##### `replay`
 
 Anyone runs `replay (id)`. It plays back the history of a run or a group from the Event Bus's event store, one recorded step at a time and in recorded order. It makes no model calls, costs nothing and changes nothing.
 
-1. The CLI sends a `replay` request with the label or run id.
+1. The CLI sends a `replay` request with the plan id, the plan id and group label, or the run id.
 2. The engine answers with one `event` reply per recorded event, then a final `ok` reply holding the gap count.
 3. A torn last line of the log, half-written when the program died, is dropped, and a gap line marks events the bus could not write. Each such place adds 1 to the gap count.
 4. The CLI returns the steps and the gap count as `ReplayData`.
@@ -1028,6 +1029,7 @@ Anyone runs `clean`, including the orchestrator. It removes everything that belo
 - Docker containers.
 - Runtime cache entries, and the language and build caches of repositories with no open run.
 - Event logs and metrics records past retention.
+- Plan folders whose groups are all closed, `.plan-failed-*` folders, and plan folders that no running group uses and that have not changed for 7 days ([chapter 16](#16-cleanup-handler)).
 
 `clean` never touches anything a live lease holds or an open run uses. `--dry-run` lists what would go and removes nothing. A branch or worktree goes only through the Cleanup Handler; the other removals belong to the part that owns the file ([chapter 16](#16-cleanup-handler)).
 
@@ -1243,9 +1245,9 @@ A `run-continue` for `komodo run plan-7f3a9c --approve`:
 ```
 
 - `group` is empty on events the CLI sends; `data.target` and `data.groups` name what to run, so the Runtime Manager never searches on its own.
-- `groups` holds the group labels the person named after the plan id. It is empty when none was named, which means every group of the plan that is not done; the Runtime Manager reads that from the group state and starts the groups in dependency order.
+- `groups` is empty on `run-start`, which means every group of the plan that is not done; the Runtime Manager reads that from the group state and starts the groups in dependency order. On `run-continue` it names the answered group [TODO: which blocked group an answer reaches when a plan has more than one ([G-329](#g-329))].
 - `target` is the plan id the person typed. `schedule` is present only with `--schedule`. `source` is `cli`.
-- `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a label was typed; the Runtime Manager then takes the label's latest attempt and returns the run id in its `accepted` reply.
+- `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a plan id was typed; the Runtime Manager then takes the plan's latest attempt and returns the run id in its `accepted` reply.
 - `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
 - `repo` and `root` are the repository id and root the engine needs because it hosts runs of several repositories. The full payload per event type is in [Event Bus](#4-event-bus).
 - While a command waits, the CLI receives over its socket connection the `run-status`, `run-complete`, `run-failure` and `error` events of the run it waits on; while `plan` waits, it also receives the `plan` / `written` event. The CLI starts work directly: it sends `plan`, which goes to the Intake Handler, or `run-start`, `run-stop` and `run-continue`, which go to the Runtime Manager.
@@ -1367,8 +1369,8 @@ The CLI owns no settings key. It reads `output.profile`, `output.turn_end_summar
 - **Help against the table:** `--help --json` and the command table disagree only when the test fails.
 - **Short commands:** `--help` and `config get` each answer under 50 ms.
 - **Version kept:** a fixture task group that names an older version keeps that version folder through an update.
-- **Label resolution:** a plan id resolves to the blueprint in a fixture plan folder, `tg-2` after it names one group of that plan, and an unknown plan id or group label exits 2 with `usage`.
-- **Answer flags:** `run tg-2 --approve --deny` exits 2 with `usage`; `--approve` for a group that is not blocked exits 1 with `not_blocked`.
+- **Label resolution:** a plan id resolves to the blueprint in a fixture plan folder, `tg-2` after it names one group of that plan, and an unknown plan id or group label exits 2 with `usage`; `run plan-7f3a9c tg-2` exits 2 with `usage`, and `plan plan-7f3a9c` with a goal sends a `plan` event whose `plan` field is `plan-7f3a9c`.
+- **Answer flags:** `run plan-7f3a9c --approve --deny` exits 2 with `usage`; `--approve` for a group that is not blocked exits 1 with `not_blocked`.
 - **Schedule time:** `--schedule 2026-10-16T02:00:00-07:00` is accepted; `--schedule tomorrow` exits 2 with `usage`.
 - **Engine on demand:** with no listener on a fixture `engine.sock`, `Engine.Ensure` starts a fake engine and the request is sent once; a second command finds the first engine and starts none.
 - **Socket access:** the fixture `engine.sock` is created readable and writable by its owner only.
