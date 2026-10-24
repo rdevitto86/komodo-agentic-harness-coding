@@ -21,11 +21,11 @@ func TestBinaryEngineServesStatus(t *testing.T) {
 
 // Phase 5 exit: one task group passes build, test and review, driven through the real binary and engine with a fake model.
 func TestPhase5OneGroupPassesBuildTestAndReview(t *testing.T) {
-	r := newBinRig(t, planFiles())
+	r := newBinRig(t, nil)
 	r.writePlan()
-	res := r.komodo(60*time.Second, "run", "ep-1")
+	res := r.komodo(60*time.Second, "run", fixturePlan)
 	if res.code != 0 {
-		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 	}
 	evs := r.waitDone(40 * time.Second)
 
@@ -53,7 +53,7 @@ func TestPhase5OneGroupPassesBuildTestAndReview(t *testing.T) {
 	}
 
 	// The builder file is on the epic branch the Commit Handler pushed to the remote.
-	if out := r.git(r.origin, "show", "komodo/ep-1:tiny/add.go"); !strings.Contains(out, "func Add") {
+	if out := r.git(r.origin, "show", "komodo/"+fixtureEpic+":tiny/add.go"); !strings.Contains(out, "func Add") {
 		t.Fatalf("the epic branch lacks the builder's file: %q", out)
 	}
 }

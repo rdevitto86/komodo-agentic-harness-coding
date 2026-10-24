@@ -458,18 +458,6 @@ func (r *binRig) ghCalls() string {
 	return string(b)
 }
 
-// planFiles is the one-epic, one-group task list the fake planner returns and phase 5 commits in advance.
-func planFiles() map[string]string {
-	return map[string]string{
-		"docs/backlog/epic-1/tg-1.1/TG.md": "id: 0192e4c5-7a10-7d3e-9b2f-000000000101\ngoal: Add an Add function to the " +
-			"tiny package\nsubsystem: none\n" +
-			"priority: normal\npoints: 3\nstatus: todo\nfiles:\n- tiny/add.go\ndependencies:\n\n" +
-			"- WHEN Add is called THE SYSTEM SHALL return the sum of its arguments\n  cmd: go test ./...\n",
-		"docs/backlog/epic-1/tg-1.1/tsk-add.md": "files:\n- tiny/add.go\ndone_when: test -f tiny/add.go\nestimate_lines: " +
-			"10\n\nAdd func Add(a, b int) int to the tiny package.\n",
-	}
-}
-
 // --- fake model
 
 // fakeModel replays the Messages interface for the planner, builder, Quality Assurance and reviewer.
@@ -483,7 +471,7 @@ type fakeModel struct {
 	started chan struct{} // closed at the first builder call while hold is set
 	once    sync.Once
 
-	plan     map[string]string                                     // when set, the planner returns these files
+	plan     string                                                // when set, the plan.md text the planner returns
 	builder  func(brief string, turn int) (string, map[string]any) // when set, picks the builder's tool call; "" ends the turn
 	verdict  func(task string) string                              // when set, the reviewer's verdict per task
 	testPass func(item string) bool                                // when set, Quality Assurance's pass flag per free item
@@ -645,15 +633,11 @@ func firstMatch(re *regexp.Regexp, s string) string {
 func (f *fakeModel) result(role, brief string) string {
 	switch role {
 	case "planner":
-		files := []map[string]string{}
 		plan := f.plan
-		if plan == nil {
-			plan = planFiles()
+		if plan == "" {
+			plan = planText(f.t, tinyPlan)
 		}
-		for p, c := range plan {
-			files = append(files, map[string]string{"path": strings.TrimPrefix(p, "docs/backlog/"), "content": c})
-		}
-		b, _ := json.Marshal(map[string]any{"files": files})
+		b, _ := json.Marshal(map[string]any{"plan": plan})
 		return string(b)
 	case "builder":
 		if f.builderFinal != nil {

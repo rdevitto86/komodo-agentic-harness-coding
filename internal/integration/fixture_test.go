@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 // fixtureDir is the checked-in repository the end-to-end checks copy.
@@ -18,31 +20,32 @@ const fixtureDir = "testdata/fixture-repo"
 // groupID is the identifier of the fixture's task group tg-1.1.
 const groupID = "0192e4c5-7a10-7d3e-9b2f-000000000301"
 
-// fixtureFiles reads the fixture and splits it into the repository files and the backlog files the planner returns.
-func fixtureFiles(t *testing.T) (repoFiles, backlog map[string]string) {
+// fixtureFiles reads the checked-in fixture repository into its files.
+func fixtureFiles(t *testing.T) map[string]string {
 	t.Helper()
-	repoFiles, backlog = map[string]string{}, map[string]string{}
+
+	files := map[string]string{}
+
 	err := filepath.WalkDir(fixtureDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
+
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
+
 		rel, _ := filepath.Rel(fixtureDir, p)
-		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(rel, "docs/backlog/") {
-			backlog[rel] = string(b)
-		} else {
-			repoFiles[rel] = string(b)
-		}
+		files[filepath.ToSlash(rel)] = string(b)
+
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repoFiles, backlog
+
+	return files
 }
 
 // merged returns the union of the given file sets, later sets winning.
@@ -56,18 +59,29 @@ func merged(sets ...map[string]string) map[string]string {
 	return out
 }
 
-// newFixtureRig builds a rig over a fresh copy of the fixture. With committed set the backlog is already in the
-// repository; otherwise only the fake planner knows it. extra files override the fixture's.
-func newFixtureRig(t *testing.T, committed bool, extra map[string]string) *binRig {
+// newFixtureRig builds a rig over a fresh copy of the fixture repository. With planned set the calc plan is already in the
+// plans folder as plan fixturePlan; otherwise only the fake planner knows it. extra files override the fixture's.
+func newFixtureRig(t *testing.T, planned bool, extra map[string]string) *binRig {
 	t.Helper()
-	repoFiles, backlog := fixtureFiles(t)
-	files := merged(repoFiles, extra)
-	if committed {
-		files = merged(files, backlog)
-	}
-	r := newBinRig(t, files)
-	r.model.plan = backlog
+
+	r := newBinRig(t, merged(fixtureFiles(t), extra))
+	r.model.plan = planText(t, calcPlan)
 	r.model.builder = fixtureBuilder(false)
+
+	if planned {
+		r.writePlanFile(calcPlan, nil)
+	}
+
+	return r
+}
+
+// newCalcRig builds a rig over the fixture repository with the calc plan written as plan fixturePlan after edit changed it.
+func newCalcRig(t *testing.T, edit func(*intake.Blueprint)) *binRig {
+	t.Helper()
+
+	r := newBinRig(t, fixtureFiles(t))
+	r.writePlanFile(calcPlan, edit)
+
 	return r
 }
 

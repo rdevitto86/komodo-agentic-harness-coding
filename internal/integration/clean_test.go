@@ -14,7 +14,7 @@ import (
 
 // A new engine's `komodo clean` removes the worktree and container a killed engine left behind.
 func TestCleanSweepsWhatAKilledEngineLeft(t *testing.T) {
-	r := newBinRig(t, planFiles())
+	r := newBinRig(t, nil)
 	boxes := r.writeDocker()
 	if res := r.komodo(60*time.Second, "status"); res.code != 0 {
 		t.Fatalf("komodo status exited %d: %s %s", res.code, res.stdout, res.stderr)
@@ -25,7 +25,7 @@ func TestCleanSweepsWhatAKilledEngineLeft(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.git(r.repo, "worktree", "add", "-q", "-b", "komodo/ep-1-tg-9.9", wt, "main")
+	r.git(r.repo, "worktree", "add", "-q", "-b", "komodo/"+fixtureEpic+"-tg-9", wt, "main")
 	box := filepath.Join(boxes, "komodo-"+stray+"-abcd1234")
 	if err := os.WriteFile(box, nil, 0o644); err != nil {
 		t.Fatal(err)

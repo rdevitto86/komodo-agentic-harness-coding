@@ -11,7 +11,7 @@ import (
 
 // Abandoning a running group frees its worktree, branch, lease and container.
 func TestAbandonFreesARunningGroupsResources(t *testing.T) {
-	r := newBinRig(t, planFiles())
+	r := newBinRig(t, nil)
 	boxes := r.writeDocker()
 	const group = "0192e4c5-7a10-7d3e-9b2f-000000000101"
 	box := filepath.Join(boxes, "komodo-"+group+"-abcd1234")
@@ -26,22 +26,22 @@ func TestAbandonFreesARunningGroupsResources(t *testing.T) {
 	started, release := r.model.arm()
 	t.Cleanup(release)
 	r.writePlan()
-	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 	}
 	select {
 	case <-started:
 	case <-time.After(40 * time.Second):
 		t.Fatalf("the builder never started\n%s", r.evidence(r.events()))
 	}
-	if res := r.komodo(60*time.Second, "abandon", fixturePlan, "tg-1.1"); res.code != 0 {
+	if res := r.komodo(60*time.Second, "abandon", fixturePlan, fixtureGroup); res.code != 0 {
 		t.Fatalf("komodo abandon exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
 	}
 	var left []string
 	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
 		left = left[:0]
 		left = append(left, r.worktrees()...)
-		if br := r.git(r.repo, "branch", "--list", "komodo/ep-1-*"); br != "" {
+		if br := r.git(r.repo, "branch", "--list", "komodo/"+fixtureEpic+"-*"); br != "" {
 			left = append(left, "branch "+br)
 		}
 		left = append(left, r.leaseFiles()...)

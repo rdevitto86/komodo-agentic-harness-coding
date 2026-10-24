@@ -55,7 +55,6 @@ type ReplayData struct {
 type planRequest struct {
 	Goal string   `json:"goal"` // the one-line goal; may be empty when Docs is set
 	Docs []string `json:"docs"` // source documents to plan from, as repository paths
-	Epic int      `json:"epic"` // an existing epic to amend as a delta; 0 for a new epic
 
 	Plan  string `json:"plan"`  // an existing plan id whose shape changes, or whose group is rewritten; empty for a new plan
 	Group string `json:"group"` // with Plan: the one group rewritten from Goal; empty for a shape change

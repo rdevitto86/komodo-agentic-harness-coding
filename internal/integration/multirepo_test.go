@@ -9,16 +9,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 // One engine serves groups from two repositories at once, each run carrying its own repository.
 func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
-	a := newBinRig(t, planFiles())
-	other := planFiles()
-	for p, body := range other {
-		other[p] = strings.ReplaceAll(body, "000000000101", "000000000202")
-	}
-	b := newBinRig(t, other)
+	a := newBinRig(t, nil)
+	b := newBinRig(t, nil)
 	// The second repository shares the first one's engine, home folder and model.
 	b.home, b.model = a.home, a.model
 	for i, e := range b.env {
@@ -29,10 +27,11 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 			b.env[i] = "ANTHROPIC_BASE_URL=" + a.model.srv.URL
 		}
 	}
+	a.writePlan()
+	b.writePlanFile(tinyPlan, func(bp *intake.Blueprint) { bp.Groups[0].ID = "0192e4c5-7a10-7d3e-9b2f-000000000202" })
 	for _, r := range []*binRig{a, b} {
-		r.writePlan()
-		if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-			t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+		if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+			t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 		}
 	}
 	want := map[string]bool{"0192e4c5-7a10-7d3e-9b2f-000000000101": false, "0192e4c5-7a10-7d3e-9b2f-000000000202": false}
@@ -56,7 +55,7 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 		}
 	}
 	for _, r := range []*binRig{a, b} {
-		if out := r.git(r.origin, "show", "komodo/ep-1:tiny/add.go"); !strings.Contains(out, "func Add") {
+		if out := r.git(r.origin, "show", "komodo/"+fixtureEpic+":tiny/add.go"); !strings.Contains(out, "func Add") {
 			t.Fatalf("the epic branch of %s lacks the builder's file: %q", r.repo, out)
 		}
 	}
@@ -64,8 +63,8 @@ func TestOneEngineRunsGroupsFromTwoRepositories(t *testing.T) {
 
 // Two repositories on one engine each get their own metrics folder, and the machine folder lists both.
 func TestMetricsEachRunWritesItsOwnRepositoryFolder(t *testing.T) {
-	a := newBinRig(t, planFiles())
-	b := newBinRig(t, planFiles())
+	a := newBinRig(t, nil)
+	b := newBinRig(t, nil)
 	b.home, b.model = a.home, a.model
 	for i, e := range b.env {
 		switch {
@@ -77,8 +76,8 @@ func TestMetricsEachRunWritesItsOwnRepositoryFolder(t *testing.T) {
 	}
 	for _, r := range []*binRig{a, b} {
 		r.writePlan()
-		if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-			t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+		if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+			t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 		}
 	}
 	for end := time.Now().Add(90 * time.Second); ; time.Sleep(300 * time.Millisecond) {

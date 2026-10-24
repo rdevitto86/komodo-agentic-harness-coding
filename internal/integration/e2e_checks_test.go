@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/config"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/task"
 )
 
@@ -132,17 +133,16 @@ func groupDone(evs []event, id string) bool {
 // it ends Blocked with reason regression.
 func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 	// Fixture B: the group may touch calc.go, so the builder's change to Add passes the scope guard and breaks TestAdd.
-	_, backlog := fixtureFiles(t)
-	tg := "docs/backlog/epic-1/tg-1.1/TG.md"
-	backlog[tg] = strings.Replace(backlog[tg], "files:\n", "files:\n- calc/calc.go\n", 1)
-	sub := "docs/backlog/epic-1/tg-1.1/tsk-sub.md"
-	backlog[sub] = strings.Replace(backlog[sub], "files:\n", "files:\n- calc/calc.go\n", 1)
-	mul := "docs/backlog/epic-1/tg-1.1/tsk-mul.md"
-	backlog[mul] = strings.Replace(backlog[mul], "files:\n", "files:\n- calc/calc.go\n", 1)
-	repoFiles, _ := fixtureFiles(t)
-	r := newBinRig(t, merged(repoFiles, backlog))
+	r := newCalcRig(t, func(b *intake.Blueprint) {
+		g := &b.Groups[0]
+		g.Files = append(g.Files, "calc/calc.go")
+
+		for i := range g.Tasks {
+			g.Tasks[i].Files = append(g.Tasks[i].Files, "calc/calc.go")
+		}
+	})
 	r.model.builder = fixtureBuilder(true)
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	var evs []event
 	for end := time.Now().Add(150 * time.Second); ; time.Sleep(time.Second) {
 		evs = r.events()
@@ -150,13 +150,13 @@ func TestReworkBrokenAddEndsBlockedRegression(t *testing.T) {
 			break
 		}
 		if has(evs, "run-status", "group.done", "") {
-			if strings.Contains(r.git(r.origin, "show", "komodo/ep-1:calc/calc.go"), "a - b") {
-				t.Fatalf("production bug: the broken Add landed on komodo/ep-1 and the group ended complete; "+
+			if strings.Contains(r.git(r.origin, "show", "komodo/"+fixtureEpic+":calc/calc.go"), "a - b") {
+				t.Fatalf("production bug: the broken Add landed on the epic branch and the group ended complete; "+
 					"check.done reported baseline pass and regression false (internal/agent/checks.go:79-83)\n%s",
 					r.evidence(evs))
 			}
 			t.Fatalf("the group ended complete without entering the rework loop, and the broken Add never reached "+
-				"komodo/ep-1 (calc.go still adds): fixture B's change did not land\n%s", r.evidence(evs))
+				"the epic branch (calc.go still adds): fixture B's change did not land\n%s", r.evidence(evs))
 		}
 		if time.Now().After(end) {
 			t.Fatalf("the group neither blocked nor finished\n%s", r.evidence(evs))
@@ -190,7 +190,7 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 		"calc/old_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAlreadyBroken(t *testing.T) { t.Fatal(\"broken at base\") }\n",
 	})
 	r.model.qaExit = 1 // the old failure makes go test ./... exit 1, and Quality Assurance reports that exit as evidence
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "group.done", "complete") {
 		t.Fatalf("the group did not pass\n%s", r.evidence(evs))
@@ -206,7 +206,7 @@ func TestOldFailurePassesWithAWarningNamingTheTest(t *testing.T) {
 	}
 }
 
-// Race: two `komodo run tg-1.1` at once get 1 lease; the other is refused and only 1 push reaches the remote.
+// Race: two `komodo run <plan id> tg-1` at once get 1 lease; the other is refused and only 1 push reaches the remote.
 func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	reached, release := r.gateSecondTask()
@@ -219,7 +219,7 @@ func TestRaceTwoRunsOneLeaseOnePush(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cmd := exec.Command(r.bin, "run", "tg-1.1")
+			cmd := exec.Command(r.bin, "run", fixturePlan, fixtureGroup)
 			cmd.Dir, cmd.Env = r.repo, r.env
 			var out bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &out, &out
@@ -290,21 +290,25 @@ func TestStopDuringBuildKeepsTheFinishedTaskAndContinues(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	reached, release := r.gateSecondTask()
 	t.Cleanup(release)
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	r.waitChan(reached, "the builder's second task")
-	r.mustRun("stop", "tg-1.1")
+	r.mustRun("stop", fixturePlan, fixtureGroup)
 	r.waitFor(60*time.Second, "run-complete", "stopped")
-	if log := r.git(r.repo, "log", "--format=%s", "komodo/ep-1-tg-1.1"); !strings.Contains(log, "tsk-") {
-		t.Fatalf("the finished task is not a local commit on the group branch: %q", log)
+	wts := r.worktrees()
+	if len(wts) != 1 {
+		t.Fatalf("want the group's one worktree after the stop, got %v", wts)
 	}
-	if out := r.git(r.origin, "branch", "--list", "komodo/*"); strings.Contains(out, "tg-1.1") {
+	if log := r.git(wts[0], "log", "--format=%s"); !strings.Contains(log, "tsk-") {
+		t.Fatalf("the finished task is not a local commit in the group's worktree: %q", log)
+	}
+	if out := r.git(r.origin, "branch", "--list", "komodo/*"); strings.Contains(out, fixtureGroup) {
 		t.Fatalf("the group branch reached the remote: %q", out)
 	}
 	if out := r.git(r.origin, "ls-tree", "-r", "--name-only", "main"); strings.Contains(out, "sub.go") {
 		t.Fatalf("work reached the remote's main")
 	}
-	if strings.Contains(r.git(r.origin, "for-each-ref", "--format=%(refname)"), "komodo/ep-1") {
-		if out := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1"); strings.Contains(out, "sub.go") {
+	if strings.Contains(r.git(r.origin, "for-each-ref", "--format=%(refname)"), "komodo/"+fixtureEpic) {
+		if out := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/"+fixtureEpic); strings.Contains(out, "sub.go") {
 			t.Fatalf("the finished task was pushed to the epic branch")
 		}
 	}
@@ -314,7 +318,7 @@ func TestStopDuringBuildKeepsTheFinishedTaskAndContinues(t *testing.T) {
 		}
 	}
 	release()
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "group.done", "complete") {
 		t.Fatalf("the continued group did not finish\n%s", r.evidence(evs))
@@ -327,7 +331,7 @@ func TestCrashDuringBuildContinuesFromSavedState(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	reached, release := r.gateSecondTask()
 	t.Cleanup(release)
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	r.waitChan(reached, "the builder's second task")
 	time.Sleep(500 * time.Millisecond)
 	before := r.eventFiles()
@@ -341,7 +345,7 @@ func TestCrashDuringBuildContinuesFromSavedState(t *testing.T) {
 			defer os.Chmod(f, 0o644)
 		}
 	}
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	for f := range before {
 		_ = os.Chmod(f, 0o644)
 	}
@@ -372,7 +376,7 @@ func TestEngineServesStatusAndExitsWhenIdle(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	reached, release := r.gateSecondTask()
 	t.Cleanup(release)
-	res := r.mustRun("run", "tg-1.1")
+	res := r.mustRun("run", fixturePlan, fixtureGroup)
 	runID, _ := dataOf(t, res)["run_id"].(string)
 	r.waitChan(reached, "the builder's second task")
 	pid := r.enginePID()
@@ -399,7 +403,7 @@ func TestEngineServesStatusAndExitsWhenIdle(t *testing.T) {
 // makes 0 model calls.
 func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	res := r.mustRun("run", "ep-1")
+	res := r.mustRun("run", fixturePlan)
 	runID, _ := dataOf(t, res)["run_id"].(string)
 	r.waitFor(90*time.Second, "run-complete", "done")
 	var log string
@@ -420,7 +424,7 @@ func TestReplayDropsATornLineAndCallsNoModel(t *testing.T) {
 	_, _ = f.WriteString(`{"type":"run-status","subtype":"stage.en`)
 	_ = f.Close()
 	calls := r.model.callCounts()
-	if lab := r.komodo(60*time.Second, "replay", "tg-1.1"); lab.code != 0 {
+	if lab := r.komodo(60*time.Second, "replay", fixturePlan, fixtureGroup); lab.code != 0 {
 		t.Errorf("replay of the finished group label exited %d\n%s", lab.code, lab.stdout)
 	}
 	rep := r.mustRun("replay", runID)
@@ -529,16 +533,16 @@ func TestAnsweringABlockApproveAndDeny(t *testing.T) {
 				}
 				return inner(brief, turn-offset)
 			}
-			r.mustRun("run", "tg-1.1")
+			r.mustRun("run", fixturePlan, fixtureGroup)
 			st := r.komodo(120*time.Second, "status", "--wait", "--timeout", "90s")
 			if st.code != 3 || !strings.Contains(st.stdout, "outside.go") {
 				t.Fatalf("status --wait did not return the question (exit %d): %s\n%s", st.code, st.stdout, r.evidence(r.events()))
 			}
-			r.mustRun("run", "tg-1.1", "--"+answer)
+			r.mustRun("run", fixturePlan, fixtureGroup, "--"+answer)
 			r.waitFor(120*time.Second, "run-status", "group.done")
 			// The epic branch reaches origin only after the epic goes quiet.
 			evs := r.waitFor(60*time.Second, "run-complete", "done")
-			ls := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1")
+			ls := r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/"+fixtureEpic)
 			if answer == "approve" && !strings.Contains(ls, "calc/outside.go") {
 				t.Fatalf("--approve did not continue with the file\n%s", r.evidence(evs))
 			}
@@ -549,11 +553,11 @@ func TestAnsweringABlockApproveAndDeny(t *testing.T) {
 	}
 }
 
-// Scheduled run: schedule.json holds target, at, queued_at and start; status lists the run; stop ep-1 removes it.
+// Scheduled run: schedule.json holds target, at, queued_at and start; status lists the run; stop <plan id> removes it.
 func TestScheduledRunIsQueuedListedAndStopped(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	at := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
-	res := r.mustRun("run", "ep-1", "--schedule", at)
+	res := r.mustRun("run", fixturePlan, "--schedule", at)
 	runID, _ := dataOf(t, res)["run_id"].(string)
 	b, err := os.ReadFile(filepath.Join(r.home, "state", "schedule.json"))
 	if err != nil {
@@ -567,10 +571,10 @@ func TestScheduledRunIsQueuedListedAndStopped(t *testing.T) {
 	if st := r.mustRun("status"); !strings.Contains(st.stdout, runID) || runID == "" {
 		t.Errorf("status does not list the queued run %q\n%s", runID, st.stdout)
 	}
-	r.mustRun("stop", "ep-1")
+	r.mustRun("stop", fixturePlan)
 	b, _ = os.ReadFile(filepath.Join(r.home, "state", "schedule.json"))
-	if bytes.Contains(b, []byte(`"ep-1"`)) {
-		t.Fatalf("stop ep-1 left the queued run:\n%s", b)
+	if bytes.Contains(b, []byte(`"`+fixturePlan+`"`)) {
+		t.Fatalf("stop %s left the queued run:\n%s", fixturePlan, b)
 	}
 }
 
@@ -579,7 +583,7 @@ func TestScheduledRunIsQueuedListedAndStopped(t *testing.T) {
 func TestOverdueRunStartsWhenTheEngineStarts(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	at := time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339)
-	r.mustRun("run", "ep-1", "--schedule", at)
+	r.mustRun("run", fixturePlan, "--schedule", at)
 	r.killEngine()
 	time.Sleep(6 * time.Second)
 	r.mustRun("status")
@@ -589,22 +593,22 @@ func TestOverdueRunStartsWhenTheEngineStarts(t *testing.T) {
 	}
 }
 
-// Labels and run ids: two runs of ep-1 get their own version 7 identifiers, replies show label and run id, and replay uses
+// Labels and run ids: two runs of the plan get their own version 7 identifiers, replies show label and run id, and replay uses
 // the latest attempt.
 func TestLabelsAndRunIDsReplayUsesLatest(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	reached, release := r.gateSecondTask()
-	first := r.mustRun("run", "ep-1")
+	first := r.mustRun("run", fixturePlan)
 	r.waitChan(reached, "the builder's second task")
-	r.mustRun("stop", "ep-1")
+	r.mustRun("stop", fixturePlan)
 	r.waitFor(60*time.Second, "run-complete", "stopped")
 	release()
-	second := r.mustRun("run", "ep-1")
+	second := r.mustRun("run", fixturePlan)
 	r.waitDone(120 * time.Second)
 	ids := []string{}
 	for _, res := range []result{first, second} {
 		id, _ := dataOf(t, res)["run_id"].(string)
-		if !runIDv7.MatchString(id) || !strings.Contains(res.stdout, "ep-1") || !strings.Contains(res.stdout, id) {
+		if !runIDv7.MatchString(id) || !strings.Contains(res.stdout, fixturePlan) || !strings.Contains(res.stdout, id) {
 			t.Fatalf("reply lacks the label or a version 7 run id: %q\n%s", id, res.stdout)
 		}
 		ids = append(ids, id)
@@ -612,50 +616,50 @@ func TestLabelsAndRunIDsReplayUsesLatest(t *testing.T) {
 	if ids[0] == ids[1] {
 		t.Fatalf("both runs share id %s", ids[0])
 	}
-	rep := r.komodo(60*time.Second, "replay", "tg-1.1")
+	rep := r.komodo(60*time.Second, "replay", fixturePlan, fixtureGroup)
 	if rep.code != 0 {
-		t.Fatalf("replay tg-1.1 exited %d\n%s", rep.code, rep.stdout)
+		t.Fatalf("replay %s %s exited %d\n%s", fixturePlan, fixtureGroup, rep.code, rep.stdout)
 	}
 	if got, _ := dataOf(t, rep)["run_id"].(string); got != ids[1] {
 		t.Fatalf("replay used run %s, want the latest %s", got, ids[1])
 	}
 }
 
-// Whole backlog: run --all with one finished and one open epic runs only the groups not done, in dependency order.
-func TestRunAllRunsOnlyOpenGroupsInDependencyOrder(t *testing.T) {
-	_, backlog := fixtureFiles(t)
-	files := merged(backlog)
-	files["docs/backlog/epic-1/tg-1.1/TG.md"] = strings.Replace(
-		files["docs/backlog/epic-1/tg-1.1/TG.md"], "status: todo", "status: done", 1)
-	tg := func(id, goal, file, deps string) string {
-		return "id: " + id + "\ngoal: " + goal + "\nsubsystem: none\npriority: normal\npoints: 1\nstatus: todo\n" +
-			"files:\n- " + file + "\ndependencies:" + deps + "\n\n- WHEN it is called THE SYSTEM SHALL return 1\n" +
-			"  cmd: go test ./...\n"
+// Whole plan: run <plan id> runs every group in dependency order, and a second run starts no group that is done.
+func TestRunPlanRunsGroupsInDependencyOrderAndSkipsDone(t *testing.T) {
+	group := func(name, id, file string, deps ...string) intake.Group {
+		return intake.Group{
+			ID: id, Name: name, Goal: "Add " + file, Points: 1, Subsystem: "none", Priority: intake.PriorityNormal,
+			Files: []string{file}, Dependencies: deps,
+			Tasks: []intake.Task{{
+				Name: "tsk-" + strings.TrimSuffix(filepath.Base(file), ".go"), Files: []string{file},
+				DoneWhen: "go build ./...", EstimateLines: 5, Card: "Add the function.",
+			}},
+		}
 	}
-	tsk := func(file string) string {
-		return "files:\n- " + file + "\ndone_when: go build ./...\nestimate_lines: 5\n\nAdd the function.\n"
-	}
-	files["docs/backlog/epic-2/tg-2.1/TG.md"] = tg("0192e4c5-7a10-7d3e-9b2f-000000000401", "Add alpha", "calc/alpha.go", "")
-	files["docs/backlog/epic-2/tg-2.1/tsk-alpha.md"] = tsk("calc/alpha.go")
-	files["docs/backlog/epic-2/tg-2.2/TG.md"] = tg("0192e4c5-7a10-7d3e-9b2f-000000000402", "Add beta", "calc/beta.go",
-		"\n- tg-2.1")
-	files["docs/backlog/epic-2/tg-2.2/tsk-beta.md"] = tsk("calc/beta.go")
-	repoFiles, _ := fixtureFiles(t)
-	r := newBinRig(t, merged(repoFiles, files))
+	r := newCalcRig(t, func(b *intake.Blueprint) {
+		b.Groups = append(b.Groups,
+			group("tg-2", "0192e4c5-7a10-7d3e-9b2f-000000000401", "calc/alpha.go"),
+			group("tg-3", "0192e4c5-7a10-7d3e-9b2f-000000000402", "calc/beta.go", "tg-2"),
+		)
+	})
 	r.model.builder = fixtureBuilder(false)
-	r.mustRun("run", "--all")
+	r.mustRun("run", fixturePlan)
 	evs := r.waitFor(180*time.Second, "run-complete", "done")
-	for end := time.Now().Add(120 * time.Second); countOf(keys(evs), "run-status/group.done") < 2; time.Sleep(time.Second) {
+	for end := time.Now().Add(120 * time.Second); countOf(keys(evs), "run-status/group.done") < 3; time.Sleep(time.Second) {
 		if time.Now().After(end) {
-			t.Fatalf("the open groups did not both finish\n%s", r.evidence(evs))
+			t.Fatalf("the groups did not all finish\n%s", r.evidence(evs))
 		}
 		evs = r.events()
 	}
+	starts := countOf(keys(evs), "run-status/session.start")
+	r.mustRun("run", fixturePlan)
+	time.Sleep(10 * time.Second)
+	if got := countOf(keys(r.events()), "run-status/session.start"); got != starts {
+		t.Fatalf("a second run started %d more sessions for groups that were done", got-starts)
+	}
 	firstDone, secondStart := -1, -1
 	for i, e := range evs {
-		if e.Group == groupID && e.Subtype == "session.start" {
-			t.Fatalf("the finished group ran again")
-		}
 		if e.Group == "0192e4c5-7a10-7d3e-9b2f-000000000401" && e.Subtype == "group.done" && firstDone < 0 {
 			firstDone = i
 		}
@@ -664,7 +668,7 @@ func TestRunAllRunsOnlyOpenGroupsInDependencyOrder(t *testing.T) {
 		}
 	}
 	if firstDone < 0 || secondStart < firstDone {
-		t.Fatalf("tg-2.2 started (%d) before tg-2.1 finished (%d)\n%s", secondStart, firstDone, r.evidence(evs))
+		t.Fatalf("tg-3 started (%d) before tg-2 finished (%d)\n%s", secondStart, firstDone, r.evidence(evs))
 	}
 }
 
@@ -673,7 +677,7 @@ func TestRunAllRunsOnlyOpenGroupsInDependencyOrder(t *testing.T) {
 func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	r.env = append(r.env, noDocker)
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	evs := r.waitDone(120 * time.Second)
 	if !has(evs, "run-status", "sandbox.fallback", "") {
 		t.Fatalf("a run without Docker published no sandbox.fallback event\n%s", r.evidence(evs))
@@ -684,17 +688,11 @@ func TestSandboxFallsBackWithoutDocker(t *testing.T) {
 // Free checks: a failing completion command returns to the Builder with its exact output, and Quality Assurance and Reviewer make
 // 0 model calls.
 func TestFreeCheckFailureReturnsOutputToBuilder(t *testing.T) {
-	_, backlog := fixtureFiles(t)
-	backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"] = strings.Replace(
-		backlog["docs/backlog/epic-1/tg-1.1/tsk-sub.md"],
-		"done_when: test -f calc/sub.go && go test ./calc/ -run TestSub",
-		"done_when: echo FREE-CHECK-OUTPUT-42 && false",
-		1,
-	)
-	repoFiles, _ := fixtureFiles(t)
-	r := newBinRig(t, merged(repoFiles, backlog))
+	r := newCalcRig(t, func(b *intake.Blueprint) {
+		b.Groups[0].Tasks[0].DoneWhen = "echo FREE-CHECK-OUTPUT-42 && false"
+	})
 	r.model.builder = fixtureBuilder(false)
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	for end := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
 		r.model.mu.Lock()
 		seen := false
@@ -733,8 +731,7 @@ func TestCacheServesContextAndStillCallsTheModel(t *testing.T) {
 	}
 	goal := "add Sub and Mul to the calc package"
 	r.mustRun("plan", goal)
-	r.waitDone(90 * time.Second)
-	// The first plan changes the repository, so the identical requests are the second and third plans.
+	// The first plan fills the cache, so the identical requests are the second and third plans.
 	_ = r.komodo(60*time.Second, "plan", goal)
 	time.Sleep(5 * time.Second)
 	first, calls := cacheFiles(), r.model.callCounts()["planner"]
@@ -777,51 +774,48 @@ const recheckFlagRef = "refs/komodo-test/recheck-ok"
 // Epic landing: an epic of 2 groups lands them one at a time; a failing recheck after the first landing pauses the epic, the
 // second group lands only after a recheck passes, and 1 pull request opens after the last landing.
 func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
-	_, backlog := fixtureFiles(t)
-	backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"] = strings.Replace(
-		backlog["docs/backlog/epic-1/tg-1.1/tsk-mul.md"],
-		"done_when: test -f calc/mul.go && go test ./calc/ -run TestMul",
-		"done_when: go test ./calc/ -run TestMul && { ! git cat-file -e komodo/ep-1:calc/mul.go || "+
-			"git rev-parse -q --verify "+recheckFlagRef+"; }",
-		1,
-	)
-	backlog["docs/backlog/epic-1/tg-1.2/TG.md"] = "id: 0192e4c5-7a10-7d3e-9b2f-000000000302\ngoal: Add gamma\n" +
-		"subsystem: none\npriority: normal\npoints: 1\nstatus: todo\nfiles:\n- calc/gamma.go\ndependencies:\n- tg-1.1\n\n" +
-		"- WHEN gamma is called THE SYSTEM SHALL return 1\n  cmd: go test ./...\n"
-	backlog["docs/backlog/epic-1/tg-1.2/tsk-gamma.md"] = "files:\n- calc/gamma.go\ndone_when: go build ./...\n" +
-		"estimate_lines: 5\n\nAdd the function.\n"
-	repoFiles, _ := fixtureFiles(t)
-	r := newBinRig(t, merged(repoFiles, backlog))
+	r := newCalcRig(t, func(b *intake.Blueprint) {
+		b.Groups[0].Tasks[1].DoneWhen = "go test ./calc/ -run TestMul && { ! git cat-file -e komodo/" + fixtureEpic +
+			":calc/mul.go || git rev-parse -q --verify " + recheckFlagRef + "; }"
+		b.Groups = append(b.Groups, intake.Group{
+			ID: "0192e4c5-7a10-7d3e-9b2f-000000000302", Name: "tg-2", Goal: "Add gamma", Points: 1, Subsystem: "none",
+			Priority: intake.PriorityNormal, Files: []string{"calc/gamma.go"}, Dependencies: []string{"tg-1"},
+			Tasks: []intake.Task{{
+				Name: "tsk-gamma", Files: []string{"calc/gamma.go"}, DoneWhen: "go build ./...", EstimateLines: 5,
+				Card: "Add the function.",
+			}},
+		})
+	})
 	r.model.builder = fixtureBuilder(false)
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	evs := r.waitFor(150*time.Second, "run-status", "epic.paused")
 	// Nothing is pushed while the epic is paused, so the epic branch exists only in the local repository.
-	if ls := r.git(r.repo, "ls-tree", "-r", "--name-only", "komodo/ep-1"); strings.Contains(ls, "gamma.go") {
+	if ls := r.git(r.repo, "ls-tree", "-r", "--name-only", "komodo/"+fixtureEpic); strings.Contains(ls, "gamma.go") {
 		t.Fatalf("the second group landed while the epic was paused")
 	}
-	if out := r.git(r.origin, "branch", "--list", "komodo/ep-1"); strings.TrimSpace(out) != "" {
+	if out := r.git(r.origin, "branch", "--list", "komodo/"+fixtureEpic); strings.TrimSpace(out) != "" {
 		t.Fatalf("the epic branch reached the remote while the epic was paused: %q", out)
 	}
 	// originTree lists the epic branch on the remote; it is empty until the epic is pushed.
 	originTree := func() string {
-		if strings.TrimSpace(r.git(r.origin, "branch", "--list", "komodo/ep-1")) == "" {
+		if strings.TrimSpace(r.git(r.origin, "branch", "--list", "komodo/"+fixtureEpic)) == "" {
 			return ""
 		}
-		return r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/ep-1")
+		return r.git(r.origin, "ls-tree", "-r", "--name-only", "komodo/"+fixtureEpic)
 	}
 	if strings.Contains(r.ghCalls(), "pr create") {
 		t.Fatalf("a pull request opened before the last landing")
 	}
 	r.git(r.repo, "update-ref", recheckFlagRef, "HEAD")
 	// A paused epic admits only the group that paused it; its next landing rechecks the epic branch.
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	r.waitFor(150*time.Second, "run-status", "epic.resumed")
 	time.Sleep(3 * time.Second)
 	if !groupDone(r.events(), groupID) {
 		t.Fatalf("no group.done after the recheck passed and tg-1.1 landed\n%s", r.evidence(r.events()))
 	}
 	if !strings.Contains(originTree(), "gamma.go") {
-		_ = r.komodo(60*time.Second, "run", "ep-1")
+		_ = r.komodo(60*time.Second, "run", fixturePlan)
 	}
 	for end := time.Now().Add(150 * time.Second); ; time.Sleep(time.Second) {
 		if strings.Contains(originTree(), "gamma.go") && strings.Contains(r.ghCalls(), "pr create") {
@@ -841,7 +835,7 @@ func TestEpicLandingPausesOnRecheckAndLandsInTurn(t *testing.T) {
 func TestLimitsGroupTokenCapNudgesPausesAndApproveContinues(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	r.setConfig("limits.group_tokens", "", "150")
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	var evs []event
 	for end := time.Now().Add(120 * time.Second); ; time.Sleep(time.Second) {
 		evs = r.events()
@@ -857,7 +851,7 @@ func TestLimitsGroupTokenCapNudgesPausesAndApproveContinues(t *testing.T) {
 		t.Fatalf("the group paused without cause group_tokens\n%s", r.evidence(evs))
 	}
 	// The nudge changes no state and publishes no event, so it is not checked here.
-	r.mustRun("run", "tg-1.1", "--approve")
+	r.mustRun("run", fixturePlan, fixtureGroup, "--approve")
 	r.waitFor(120*time.Second, "run-status", "group.resumed")
 }
 
@@ -873,7 +867,7 @@ func TestLimitsPlanWindowWarnsAndPauses(t *testing.T) {
 func TestModelLinksPaidOffPausesInsteadOfPaying(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
 	r.setConfig("providers.paid", "allowed", "never")
-	r.mustRun("run", "tg-1.1")
+	r.mustRun("run", fixturePlan, fixtureGroup)
 	var evs []event
 	for end := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
 		evs = r.events()
@@ -899,7 +893,7 @@ func TestModelLinksPaidOffPausesInsteadOfPaying(t *testing.T) {
 // Tool servers: with none switched on, no tool server starts and no mcp event is published.
 func TestToolServersNoneSwitchedOnStartsNone(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	r.mustRun("run", "ep-1")
+	r.mustRun("run", fixturePlan)
 	evs := r.waitDone(120 * time.Second)
 	for _, e := range evs {
 		if e.Type == "mcp" {

@@ -113,8 +113,8 @@ var groupLife = []string{
 // Event round trip: every event of a group's life arrives once, in order, and the event store holds a line for each.
 func TestEventRoundTripOnTheFixtureGroup(t *testing.T) {
 	r := newFixtureRig(t, true, nil)
-	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-		t.Fatalf("komodo run ep-1 exited %d\n%s\n%s", res.code, res.stdout, res.stderr)
+	if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\n%s\n%s", fixturePlan, res.code, res.stdout, res.stderr)
 	}
 	evs := r.waitFor(90*time.Second, "run-complete", "done")
 	got := keys(evs)
@@ -178,7 +178,7 @@ func containers(dir string) []string {
 	return out
 }
 
-// Full run: install, plan on the fixture's goal, run ep-1; the group passes build, test and review, lands on komodo/ep-1 of
+// Full run: install, plan on the fixture's goal, run the plan id; the group passes build, test and review, lands on the epic of
 // the bare remote with 1 pull request, and cleanup leaves 0 worktrees, 0 containers and no lease.
 func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
@@ -186,14 +186,11 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 	if res := r.terminal(60*time.Second, "install", "--hosts", "claude", "--no-path"); res.code != 0 {
 		t.Fatalf("komodo install exited %d\n%s", res.code, res.stdout)
 	}
-	if res := r.komodo(60*time.Second, "plan", "add Sub and Mul to the calc package"); res.code != 0 {
-		t.Fatalf("komodo plan exited %d\n%s\n%s", res.code, res.stdout, res.stderr)
-	}
-	// plan ends in the run-start of its groups, so the run is already live; the design's `komodo run ep-1` is checked
-	// once the group is done (TestRunRightAfterPlanIsRefusedCleanly covers the command issued mid-run).
+	id, _ := r.planGoal("add Sub and Mul to the calc package")
+	r.mustRun("run", id)
 	evs := r.waitDone(90 * time.Second)
-	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 && !strings.Contains(res.stdout, "done") {
-		t.Errorf("komodo run ep-1 after the group finished exited %d\n%s", res.code, res.stdout)
+	if res := r.komodo(60*time.Second, "run", id); res.code != 0 && !strings.Contains(res.stdout, "done") {
+		t.Errorf("komodo run %s after the group finished exited %d\n%s", id, res.code, res.stdout)
 	}
 	if miss, ok := subseq(stages(evs), []string{"build", "test_review", "commit", "cleanup"}); !ok {
 		t.Fatalf("stage %s missing: %v", miss, stages(evs))
@@ -202,8 +199,8 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 		t.Fatalf("the group did not end complete\n%s", r.evidence(evs))
 	}
 	for _, f := range []string{"calc/sub.go", "calc/mul.go", "calc/sub_test.go", "calc/mul_test.go"} {
-		if out := r.git(r.origin, "show", "komodo/ep-1:"+f); out == "" {
-			t.Errorf("komodo/ep-1 of the remote lacks %s", f)
+		if out := r.git(r.origin, "show", "komodo/"+id+":"+f); out == "" {
+			t.Errorf("komodo/%s of the remote lacks %s", id, f)
 		}
 	}
 	if n := strings.Count(r.ghCalls(), "pr create"); n != 1 {
@@ -227,17 +224,18 @@ func TestFullRunInstallPlanRunPublishesAndCleansUp(t *testing.T) {
 // runIDv7 matches a version 7 run identifier.
 var runIDv7 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// Full run, second step: `komodo run ep-1` straight after `komodo plan` meets the run plan started; it must continue or be
-// refused as already running, never fail on a git error.
-func TestRunRightAfterPlanIsRefusedCleanly(t *testing.T) {
+// Full run, second step: `komodo run <plan id>` twice in a row meets the run the first command started; the second must
+// continue or be refused as already running, never fail on a git error.
+func TestRunTwiceIsRefusedCleanly(t *testing.T) {
 	r := newFixtureRig(t, false, nil)
-	r.mustRun("plan", "add Sub and Mul to the calc package")
-	res := r.komodo(60*time.Second, "run", "ep-1")
+	id, _ := r.planGoal("add Sub and Mul to the calc package")
+	r.mustRun("run", id)
+	res := r.komodo(60*time.Second, "run", id)
 	if strings.Contains(res.stdout, "fatal:") {
-		t.Fatalf("run ep-1 after plan failed with a raw git error\n%s", res.stdout)
+		t.Fatalf("a second run of %s failed with a raw git error\n%s", id, res.stdout)
 	}
 	if res.code != 0 && !strings.Contains(res.stdout, "running") {
-		t.Fatalf("run ep-1 after plan exited %d\n%s", res.code, res.stdout)
+		t.Fatalf("a second run of %s exited %d\n%s", id, res.code, res.stdout)
 	}
 }
 

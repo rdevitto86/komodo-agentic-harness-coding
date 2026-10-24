@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
 // noDocker points the Docker client at a socket that does not exist, so Quality Assurance uses the operating-system sandbox.
 const noDocker = "DOCKER_HOST=unix:///nonexistent/docker.sock"
 
 // epicLacksFile passes while the epic branch lacks the group's file and fails once the landing put it there.
-const epicLacksFile = `! git cat-file -e komodo/ep-1:tiny/add.go`
+const epicLacksFile = `! git cat-file -e komodo/` + fixtureEpic + `:tiny/add.go`
 
 // waitFor polls the event store until an event of the type and subtype appears or the timeout fails the test.
 func (r *binRig) waitFor(timeout time.Duration, typ, sub string) []event {
@@ -28,17 +30,10 @@ func (r *binRig) waitFor(timeout time.Duration, typ, sub string) []event {
 
 // A landing whose free check fails on the epic tip pauses the epic and opens no pull request.
 func TestRecheckFailureStopsTheLanding(t *testing.T) {
-	files := planFiles()
-	files["docs/backlog/epic-1/tg-1.1/tsk-add.md"] = strings.Replace(
-		files["docs/backlog/epic-1/tg-1.1/tsk-add.md"],
-		"done_when: test -f tiny/add.go",
-		"done_when: "+epicLacksFile,
-		1,
-	)
-	r := newBinRig(t, files)
-	r.writePlan()
-	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	r := newBinRig(t, nil)
+	r.writePlanFile(tinyPlan, func(b *intake.Blueprint) { b.Groups[0].Tasks[0].DoneWhen = epicLacksFile })
+	if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 	}
 	evs := r.waitFor(60*time.Second, "run-status", "epic.paused")
 	if has(evs, "run-status", "publish.done", "") {
@@ -51,10 +46,10 @@ func TestRecheckFailureStopsTheLanding(t *testing.T) {
 
 // A landing whose free checks pass runs them on the epic tip, then opens the pull request.
 func TestRecheckPassLetsTheLandingFinish(t *testing.T) {
-	r := newBinRig(t, planFiles())
+	r := newBinRig(t, nil)
 	r.writePlan()
-	if res := r.komodo(60*time.Second, "run", "ep-1"); res.code != 0 {
-		t.Fatalf("komodo run ep-1 exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	if res := r.komodo(60*time.Second, "run", fixturePlan); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", fixturePlan, res.code, res.stdout, res.stderr)
 	}
 	evs := r.waitDone(90 * time.Second)
 	if has(evs, "run-status", "epic.paused", "") {

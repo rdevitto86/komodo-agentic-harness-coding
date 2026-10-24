@@ -5,107 +5,109 @@ package integration
 import (
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cli"
 	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
 
-// fixturePlan is the plan id the fixture's plan folder carries.
-const fixturePlan = "ep-1"
+// The fixture plans are plan.md files in testdata/plans, parsed with intake.Parse like the planner's own output.
+const (
+	// fixturePlan is the plan id a pre-written fixture plan carries.
+	fixturePlan = "plan-0a1b2c"
 
-// fixtureBacklog is the folder of the fixture group inside the rig's repository.
-const fixtureBacklog = "docs/backlog/epic-1/tg-1.1"
+	// fixtureGroup is the label of the fixture plan's one group.
+	fixtureGroup = "tg-1"
 
-// writePlan writes the blueprint of the fixture plan, with one group tg-1.1 built from the repository's group files, into
-// the rig's plans folder, where the command line resolves plan ids and group labels.
-func (r *binRig) writePlan() {
-	r.t.Helper()
-	writeBlueprint(r.t, r.home, cli.RepoID(r.repo), filepath.Join(r.repo, filepath.FromSlash(fixtureBacklog)))
-}
+	// fixtureEpic is the epic branch the fixture plan's group lands on, without the komodo/ prefix.
+	fixtureEpic = fixturePlan
 
-// writeBlueprint writes the fixture plan's blueprint for a repository id under a Komodo home; the group's goal, files,
-// tasks and acceptance come from the TG.md and tsk-*.md files of dir.
-func writeBlueprint(t *testing.T, home, repoID, dir string) {
+	// tinyPlan is the plan.md of the tiny module: one group that adds an Add function.
+	tinyPlan = "tiny.md"
+
+	// calcPlan is the plan.md of the calc fixture repository: one group that adds Sub and Mul.
+	calcPlan = "calc.md"
+)
+
+// planText reads a fixture plan.md from testdata/plans.
+func planText(t *testing.T, name string) string {
 	t.Helper()
 
-	g := intake.Group{ID: groupID, Name: "tg-1.1", Priority: intake.PriorityNormal}
-
-	if tg, err := os.ReadFile(filepath.Join(dir, "TG.md")); err == nil {
-		fields, accept := splitFixture(string(tg))
-		g.ID = strings.Join(fields["id"], "")
-		g.Goal, g.Files, g.Subsystem = strings.Join(fields["goal"], ""), fields["files"], "none"
-		g.Points, _ = strconv.Atoi(strings.Join(fields["points"], ""))
-
-		names, _ := filepath.Glob(filepath.Join(dir, "tsk-*.md"))
-		for i, n := range names {
-			b, err := os.ReadFile(n)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			tf, _ := splitFixture(string(b))
-			tk := intake.Task{
-				Name:     strings.TrimSuffix(filepath.Base(n), ".md"),
-				Files:    tf["files"],
-				DoneWhen: strings.Join(tf["done_when"], ""),
-			}
-			tk.EstimateLines, _ = strconv.Atoi(strings.Join(tf["estimate_lines"], ""))
-
-			if i == 0 {
-				tk.Acceptance = accept
-			}
-
-			g.Tasks = append(g.Tasks, tk)
-		}
-	}
-
-	err := intake.WriteBlueprint(home, intake.Blueprint{
-		Plan:   fixturePlan,
-		Repo:   intake.RepoFolder(repoID),
-		Goal:   "the fixture plan",
-		Groups: []intake.Group{g},
-	})
+	b, err := os.ReadFile(filepath.Join("testdata", "plans", name))
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	return string(b)
 }
 
-// splitFixture reads the key: value block of a fixture file into lists by key and the acceptance items after it.
-func splitFixture(text string) (map[string][]string, []intake.Acceptance) {
-	fields := map[string][]string{}
+// planBlueprint parses a fixture plan.md and fails the test on any grammar finding.
+func planBlueprint(t *testing.T, name string) intake.Blueprint {
+	t.Helper()
 
-	var (
-		accept []intake.Acceptance
-		key    string
-		body   bool
-	)
+	b, found := intake.Parse(planText(t, name))
+	if len(found) > 0 {
+		t.Fatalf("fixture plan %s does not parse: %v", name, found)
+	}
 
-	for _, line := range strings.Split(text, "\n") {
-		switch {
-		case !body && strings.TrimSpace(line) == "":
-			body = true
-		case body && strings.HasPrefix(line, "- "):
-			kw, rest, _ := strings.Cut(strings.TrimSpace(line[2:]), " ")
-			accept = append(accept, intake.Acceptance{Keyword: kw, Text: rest})
-		case body && strings.HasPrefix(strings.TrimSpace(line), "cmd:") && len(accept) > 0:
-			accept[len(accept)-1].Cmd = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "cmd:"))
-		case !body && strings.HasPrefix(line, "- "):
-			fields[key] = append(fields[key], strings.TrimSpace(line[2:]))
-		case !body:
-			k, v, ok := strings.Cut(line, ":")
-			if !ok {
-				continue
-			}
+	return b
+}
 
-			key = k
-			if v = strings.TrimSpace(v); v != "" {
-				fields[key] = []string{v}
-			}
+// writePlan writes the tiny fixture plan under the rig's Komodo home as plan fixturePlan.
+func (r *binRig) writePlan() { r.writePlanFile(tinyPlan, nil) }
+
+// writePlanFile parses a fixture plan.md, lets edit change the blueprint, and writes plan.md and blueprint.json into the
+// plans folder of the rig's repository as plan fixturePlan, where the command line resolves plan ids and group labels.
+func (r *binRig) writePlanFile(name string, edit func(*intake.Blueprint)) {
+	r.t.Helper()
+
+	b := planBlueprint(r.t, name)
+	b.Plan, b.Repo = fixturePlan, intake.RepoFolder(cli.RepoID(r.repo))
+
+	if edit != nil {
+		edit(&b)
+	}
+
+	text := intake.Render(b)
+
+	for i, g := range b.Groups {
+		h, err := intake.CardHash(text, g)
+		if err != nil {
+			r.t.Fatal(err)
+		}
+
+		b.Groups[i].Hash = h
+	}
+
+	if err := intake.WriteBlueprint(r.home, b); err != nil {
+		r.t.Fatal(err)
+	}
+
+	path := filepath.Join(intake.PlanDir(r.home, b.Repo, b.Plan), "plan.md")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// planPath returns the path of plan.md for a plan id of the rig's repository.
+func (r *binRig) planPath(id string) string {
+	return filepath.Join(intake.PlanDir(r.home, intake.RepoFolder(cli.RepoID(r.repo)), id), "plan.md")
+}
+
+// plansWritten lists the plan ids under the rig's plans folder, which `komodo plan` filled.
+func (r *binRig) plansWritten() []string {
+	r.t.Helper()
+
+	dir := filepath.Dir(intake.PlanDir(r.home, intake.RepoFolder(cli.RepoID(r.repo)), "x"))
+	ents, _ := os.ReadDir(dir)
+
+	var ids []string
+
+	for _, e := range ents {
+		if e.IsDir() && e.Name()[0] != '.' {
+			ids = append(ids, e.Name())
 		}
 	}
 
-	return fields, accept
+	return ids
 }

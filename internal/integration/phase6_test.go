@@ -7,10 +7,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/cli"
+	"github.com/rdevitto86/komodo-agentic-harness-coding/internal/intake"
 )
+
+// readFile returns the text of a file or fails the test.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(b)
+}
 
 // worktrees lists the registered worktrees of the fixture other than the main one and the epic's landing worktree.
 func (r *binRig) worktrees() []string {
@@ -43,30 +57,50 @@ func (r *binRig) leaseFiles() []string {
 	return out
 }
 
-// Phase 6 exit: a planned group is published and cleaned up, driven through the real binary from `komodo plan`.
-func TestPhase6PlannedGroupIsPublishedAndCleanedUp(t *testing.T) {
-	t.Skip("the planner now returns one plan text; this flow passes again once intake writes plan.md and run takes a plan id")
-	r := newBinRig(t, nil)
-	res := r.komodo(90*time.Second, "plan", "add an Add function to the tiny package")
+// planGoal runs `komodo plan` on a goal and returns the plan id and the path of plan.md the plan folder holds.
+func (r *binRig) planGoal(goal string) (id, path string) {
+	r.t.Helper()
+
+	res := r.komodo(90*time.Second, "plan", goal)
 	if res.code != 0 {
-		t.Fatalf("komodo plan exited %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+		r.t.Fatalf("komodo plan exited %d\nstdout: %s\nstderr: %s\n%s", res.code, res.stdout, res.stderr, r.evidence(r.events()))
 	}
-	tg := filepath.Join(r.repo, "docs", "backlog", "epic-1", "tg-1.1", "TG.md")
-	for end := time.Now().Add(60 * time.Second); ; time.Sleep(200 * time.Millisecond) {
-		if _, err := os.Stat(tg); err == nil {
-			break
-		}
-		if time.Now().After(end) {
-			r.signalEngine(syscall.SIGUSR1)
-			time.Sleep(time.Second)
-			t.Fatalf("the plan wrote no task list; model calls %v\n%s", r.model.callCounts(), r.evidence(r.events()))
-		}
+
+	ids := r.plansWritten()
+	if len(ids) != 1 {
+		r.t.Fatalf("plan wrote %d plan folders, want 1: %v\nstdout: %s", len(ids), ids, res.stdout)
 	}
+
+	id = ids[0]
+	path = filepath.Join(r.home, "plans", intake.RepoFolder(cli.RepoID(r.repo)), id, "plan.md")
+
+	if !strings.Contains(res.stdout, id) || !strings.Contains(res.stdout, path) {
+		r.t.Fatalf("plan printed neither the plan id %s nor the path %s\nstdout: %s", id, path, res.stdout)
+	}
+
+	return id, path
+}
+
+// Phase 6 exit: a planned group is published and cleaned up, driven through the real binary from `komodo plan`: the plan
+// writes plan.md, and `komodo run <plan id>` then runs it.
+func TestPhase6PlannedGroupIsPublishedAndCleanedUp(t *testing.T) {
+	r := newBinRig(t, nil)
+	id, path := r.planGoal("add an Add function to the tiny package")
+
+	b, found := intake.Parse(readFile(t, path))
+	if len(found) > 0 || b.Plan != id || len(b.Groups) != 1 || b.Groups[0].Name != "tg-1" {
+		t.Fatalf("plan.md is not the planner's plan %s: %+v %v", id, b, found)
+	}
+
+	if res := r.komodo(60*time.Second, "run", id); res.code != 0 {
+		t.Fatalf("komodo run %s exited %d\nstdout: %s\nstderr: %s", id, res.code, res.stdout, res.stderr)
+	}
+
 	evs := r.waitDone(120 * time.Second)
 
 	// Published: the epic branch holds the group's work locally, the publish facts are on the bus, and the pull request was
 	// opened with gh.
-	if out := r.git(r.origin, "show", "komodo/ep-1:tiny/add.go"); !strings.Contains(out, "func Add") {
+	if out := r.git(r.origin, "show", "komodo/"+id+":tiny/add.go"); !strings.Contains(out, "func Add") {
 		t.Fatalf("the epic branch lacks the published file: %q", out)
 	}
 	if !has(evs, "run-status", "publish.done", "") {
@@ -80,7 +114,7 @@ func TestPhase6PlannedGroupIsPublishedAndCleanedUp(t *testing.T) {
 	if wt := r.worktrees(); len(wt) != 0 {
 		t.Fatalf("group worktrees remain: %v", wt)
 	}
-	if br := r.git(r.repo, "branch", "--list", "komodo/ep-1-*"); br != "" {
+	if br := r.git(r.repo, "branch", "--list", "komodo/"+id+"-*"); br != "" {
 		t.Fatalf("group branches remain: %q", br)
 	}
 	if ls := r.leaseFiles(); len(ls) != 0 {
