@@ -382,7 +382,8 @@ func (m *Manager) Recheck(ctx context.Context) {
 
 	defer m.destroyInstance(ctx, inst.ID)
 
-	fails, err := m.runChecks(ctx, m.runnerOn("recheck", inst.ID))
+	// The epic tip holds the other groups' landed work, so their files are in scope for the recheck.
+	fails, err := m.runChecks(ctx, m.runnerOn("recheck", inst.ID), m.spec.OtherFiles)
 	switch {
 	case err != nil:
 		m.c.OnRecheck(false, err.Error())

@@ -587,7 +587,7 @@ func (m *Manager) runTestReview(ctx context.Context) error {
 
 		m.voidSignoff(ctx)
 
-		if fails, err := m.runChecks(ctx, m.runner("qa")); err != nil {
+		if fails, err := m.runChecks(ctx, m.runner("qa"), nil); err != nil {
 			return err
 		} else if len(fails) > 0 {
 			return m.rework(ctx, fails)
@@ -664,11 +664,16 @@ func (m *Manager) dirtyWork(ctx context.Context) (string, error) {
 	return m.c.Git.ReadOnly(ctx, m.spec.Lease, "status", []string{"--porcelain"})
 }
 
-// runChecks runs the mechanical checks through a runner and returns the failures, each with its exact output.
-func (m *Manager) runChecks(ctx context.Context, run agent.CommandRunner) ([]string, error) {
+// runChecks runs the mechanical checks through a runner and returns the failures, each with its exact output. The scope
+// check also accepts the extra globs.
+func (m *Manager) runChecks(ctx context.Context, run agent.CommandRunner, extra []string) ([]string, error) {
 	if m.c.Checks == nil {
 		return nil, nil
 	}
+
+	m.mu.Lock()
+	m.scopeExtra = slices.Clone(extra)
+	m.mu.Unlock()
 
 	tree, err := m.c.Git.TreeHash(ctx, m.spec.Lease)
 	if err != nil {
@@ -692,7 +697,7 @@ func (m *Manager) runChecks(ctx context.Context, run agent.CommandRunner) ([]str
 			Group:    m.spec.Group,
 			Base:     m.c.Base,
 			Head:     tree,
-			Files:    m.effectiveFiles(),
+			Files:    m.CheckFiles(),
 			Changed:  diffPaths(diff),
 			DoneWhen: done,
 			Language: m.c.Language,

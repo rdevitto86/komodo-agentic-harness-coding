@@ -206,7 +206,7 @@ func (k *repoKit) start(ctx context.Context, spec engine.GroupSpec, h cache.Hand
 
 	var m *task.Manager
 	secrets, sibling, err := task.CheckerPolicy(
-		func() []string { return m.Files() },
+		func() []string { return m.CheckFiles() },
 		tspec.Lease.Worktree,
 	)
 	if err != nil {

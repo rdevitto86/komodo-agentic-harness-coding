@@ -136,6 +136,19 @@ func TestRiskyGroupBlocksThenLandsOnApprove(t *testing.T) {
 	r.waitUntil(60*time.Second, "the risky group resuming", func(evs []event) bool {
 		return groupHas(evs, risky, "run-status", "group.resumed")
 	})
+
+	// The risky group lands, the dependent group runs and lands, and the run completes.
+	evs = r.waitUntil(150*time.Second, "the risky group landed and the dependent group ran", func(evs []event) bool {
+		return groupHas(evs, risky, "run-status", "group.done") && groupHas(evs, dependent, "run-status", "group.done")
+	})
+
+	if !groupHas(evs, dependent, "run-status", "session.start") {
+		t.Fatalf("the dependent group never started\n%s", r.evidence(evs))
+	}
+
+	r.waitUntil(60*time.Second, "the run completing", func(evs []event) bool {
+		return has(evs, "run-complete", "done", "")
+	})
 }
 
 // Group rewrite: `komodo run <plan id> <group> "<prompt>"` on a group that has not started rewrites it in place, then

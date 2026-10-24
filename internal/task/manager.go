@@ -60,6 +60,7 @@ type Manager struct {
 	prog       Progress
 	facts      []Fact
 	files      []string
+	scopeExtra []string // other groups' globs the scope check accepts while a recheck runs
 	open       *Escalation
 	pauseReq   *pauseCmd
 	lastPause  PauseState
@@ -332,6 +333,13 @@ func (m *Manager) Runner(role string) agent.CommandRunner { return m.runner(role
 
 // Files returns the group's file list including what scope answers added.
 func (m *Manager) Files() []string { return m.effectiveFiles() }
+
+// CheckFiles returns the file list the scope check accepts: the group's own, plus the other groups' during a recheck.
+func (m *Manager) CheckFiles() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append(slices.Clone(m.files), m.scopeExtra...)
+}
 
 // setStage moves the group to a stage and reports it.
 func (m *Manager) setStage(ctx context.Context, st state.Stage) error {
