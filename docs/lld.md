@@ -1248,7 +1248,7 @@ A `run-continue` for `komodo run plan-7f3a9c tg-2 --approve`:
 ```
 
 - `group` is empty on events the CLI sends; `data.target` and `data.groups` name what to run, so the Runtime Manager never searches on its own.
-- `groups` is empty on `run-start`, which means every group of the plan that is not done; the Runtime Manager reads that from the group state and starts the groups in dependency order. On `run-continue` it is empty to answer every blocked group of the plan, or holds one label to answer that group; the example answers `tg-2` alone.
+- `groups` is empty on `run-start` from `run <plan id>`, which means every group of the plan that is not done; after a group rewrite it holds that one label; the Runtime Manager reads that from the group state and starts the groups in dependency order. On `run-continue` it is empty to answer every blocked group of the plan, or holds one label to answer that group; the example answers `tg-2` alone.
 - `target` is the plan id the person typed. `schedule` is present only with `--schedule`. `source` is `cli`.
 - `run` holds the run id the CLI generated for `run-start`; for a scheduled run it holds the run id the engine minted when it queued the entry. For `run-stop` and `run-continue` it holds the run id the caller typed, or is empty when a plan id was typed; the Runtime Manager then takes the plan's latest attempt and returns the run id in its `accepted` reply.
 - `answer` is `approve` or `deny`, and is present only on `run-continue` sent by `--approve` or `--deny`.
