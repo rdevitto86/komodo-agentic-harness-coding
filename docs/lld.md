@@ -5606,6 +5606,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 |---|---|
 | [G-13](#g-13) | Tuning the steering-phrase list |
 | [G-18](#g-18) | Repo map patterns for TypeScript, Python and Rust against 3 real repositories |
+| [G-333](#g-333) | How agents treat untrusted text as data, not instructions |
 
 ## 7. Runtime Manager
 
@@ -15154,6 +15155,7 @@ Each id is a row in the [gap register](#appendix-b-gap-register); the rows are n
 | [G-17](#g-17) | The 50% prompt-cache hit fixture needs real paid sessions | `cache_read_share` |
 | [G-19](#g-19) | The read target is unmeasured | 18.8 |
 | [G-26](#g-26) | Splitting tokens and dollars by provider family | `ScoreRow` |
+| [G-334](#g-334) | A fixed evaluation set run before each release | Scorecard |
 
 ## 19. Resource Manager
 
@@ -16172,6 +16174,8 @@ Each row is an open owner decision, a verification spike, a measurement or a lat
 | <a id="g-321"></a>G-321 | Coverage | How the planner brings a whole repository to the 90 percent line coverage floor. Owner: "The entire repo has to meet 90%, but that's the job of the planner. Each builder focuses on getting its assigned tasks over 90% and not regression below 90% for the whole repo." | Owner decision | [13](#13-quality-assurance) |
 | <a id="g-323"></a>G-323 | Changelog anchor | No lasting record of task groups is kept. Owner: "I dont think we should document the task groups at all. The PRD and HLD might have scoped versions we can use as an anchor for the changelog." Open: whether and how scoped versions of the PRD and HLD anchor the changelog | Owner decision | [15](#15-commit-handler) |
 | <a id="g-332"></a>G-332 | Dropped risky group | `komodo run <plan id> <group> --deny` on a high or critical group drops it. Open: the outcome recorded for the dropped group, what its dependents do, and what the Cleanup Handler frees | Owner decision | [15](#15-commit-handler), [7](#7-runtime-manager) |
+| <a id="g-333"></a>G-333 | Prompt injection | Text an agent reads can carry instructions meant to hijack it: repository files, the documents and prompts the planner reads, test and tool output, and outside tool servers. No part of the design treats that text as data rather than instructions, and the Reviewer's `security` lens covers injection in code, not attacks on agents. Open: how each agent's brief marks untrusted text, which actions need a check before they run, and how an attempt is detected and reported | Owner decision | [6](#6-context-manager), [11](#11-task-manager), [14](#14-reviewer) |
+| <a id="g-334"></a>G-334 | Agent evaluations | Nothing re-tests the agents when a prompt, skill or model changes; golden files cover only the Output Formatter's text, and the per-agent scorecard looks back 30 days. Open: a fixed set of sample plans and groups, run before a release, whose pass rate, cost and time are compared with the last release | Owner decision | [18](#18-metrics-service) |
 
 Rule for new gaps: no section may say "later" or "TBD", or rest on an unverified default, without a row here.
 
